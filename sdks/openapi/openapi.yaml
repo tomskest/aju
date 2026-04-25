@@ -1,0 +1,798 @@
+openapi: 3.0.3
+info:
+  title: aju API
+  version: 0.1.0
+  summary: HTTP API for the aju memory platform.
+  description: |
+    The aju HTTP API. This spec is the single source of truth for every
+    client SDK (TypeScript, Python, Go). Changes here flow into all SDKs
+    via `sdks/scripts/generate.sh`.
+
+    Scope (v0.1): the vault content API and brain listing — the surface
+    that third-party integrations and agents need. Auth, signup, OAuth,
+    org administration, and session-only routes are intentionally
+    excluded from the SDK surface.
+  license:
+    name: See repository LICENSE
+
+servers:
+  - url: https://aju.sh
+    description: Production
+  - url: http://localhost:3000
+    description: Local development
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: brains
+    description: List and read brains the caller can access.
+  - name: vault
+    description: Read and write documents inside a brain.
+  - name: vault-files
+    description: Binary file storage attached to a brain.
+  - name: meta
+    description: Identity and status endpoints.
+
+paths:
+  /api/brains:
+    get:
+      tags: [brains]
+      operationId: listBrains
+      summary: List brains the caller can access.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [brains]
+                properties:
+                  brains:
+                    type: array
+                    items: { $ref: "#/components/schemas/Brain" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/brains/{id}:
+    parameters:
+      - $ref: "#/components/parameters/BrainIdPath"
+    get:
+      tags: [brains]
+      operationId: getBrain
+      summary: Get a single brain by ID.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Brain" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/vault/search:
+    get:
+      tags: [vault]
+      operationId: searchVault
+      summary: Full-text search across documents in one or more brains.
+      parameters:
+        - $ref: "#/components/parameters/Query"
+        - $ref: "#/components/parameters/BrainsQuery"
+        - name: section
+          in: query
+          schema: { type: string }
+        - name: type
+          in: query
+          description: Filter by `docType` frontmatter value.
+          schema: { type: string }
+        - name: status
+          in: query
+          description: Filter by `docStatus` frontmatter value.
+          schema: { type: string }
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SearchResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/vault/semantic-search:
+    get:
+      tags: [vault]
+      operationId: semanticSearchVault
+      summary: Vector / hybrid semantic search.
+      parameters:
+        - $ref: "#/components/parameters/Query"
+        - $ref: "#/components/parameters/BrainsQuery"
+        - name: section
+          in: query
+          schema: { type: string }
+        - name: type
+          in: query
+          schema: { type: string }
+        - name: mode
+          in: query
+          description: Retrieval strategy.
+          schema:
+            type: string
+            enum: [hybrid, vector, keyword]
+            default: hybrid
+        - $ref: "#/components/parameters/Limit"
+        - name: threshold
+          in: query
+          description: Minimum similarity score (0.0–1.0).
+          schema: { type: number, format: float, default: 0 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SearchResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/vault/deep-search:
+    get:
+      tags: [vault]
+      operationId: deepSearchVault
+      summary: Graph-RAG search — follows wikilinks from seed documents.
+      parameters:
+        - $ref: "#/components/parameters/Query"
+        - $ref: "#/components/parameters/BrainsQuery"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SearchResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/vault/browse:
+    get:
+      tags: [vault]
+      operationId: browseVault
+      summary: List documents in a brain, optionally filtered by directory or section.
+      parameters:
+        - $ref: "#/components/parameters/BrainQuery"
+        - name: directory
+          in: query
+          schema: { type: string }
+        - name: section
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [count, documents]
+                properties:
+                  count: { type: integer }
+                  documents:
+                    type: array
+                    items: { $ref: "#/components/schemas/DocumentSummary" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/vault/document:
+    get:
+      tags: [vault]
+      operationId: readDocument
+      summary: Read a single document by path.
+      parameters:
+        - $ref: "#/components/parameters/BrainQuery"
+        - $ref: "#/components/parameters/Path"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Document" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/vault/create:
+    post:
+      tags: [vault]
+      operationId: createDocument
+      summary: Create a document.
+      parameters:
+        - $ref: "#/components/parameters/BrainQuery"
+        - name: defer_index
+          in: query
+          description: Skip per-create link rebuild + embedding. Caller should invoke `reindex` after bulk import.
+          schema: { type: string, enum: ["1"] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DocumentWrite" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Document" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/vault/update:
+    post:
+      tags: [vault]
+      operationId: updateDocument
+      summary: Update a document in place (by path).
+      parameters:
+        - $ref: "#/components/parameters/BrainQuery"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DocumentWrite" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Document" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/vault/delete:
+    post:
+      tags: [vault]
+      operationId: deleteDocument
+      summary: Delete a document by path.
+      parameters:
+        - $ref: "#/components/parameters/BrainQuery"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path, source]
+              properties:
+                path: { type: string }
+                source: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted: { type: boolean }
+                  path: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/vault/related:
+    get:
+      tags: [vault]
+      operationId: relatedDocuments
+      summary: Documents related to a given document by outgoing/incoming links and tag overlap.
+      parameters:
+        - $ref: "#/components/parameters/BrainQuery"
+        - $ref: "#/components/parameters/Path"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  related:
+                    type: array
+                    items: { $ref: "#/components/schemas/RelatedDocument" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/vault/backlinks:
+    get:
+      tags: [vault]
+      operationId: backlinks
+      summary: Documents that link TO the given document.
+      parameters:
+        - $ref: "#/components/parameters/BrainQuery"
+        - $ref: "#/components/parameters/Path"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  backlinks:
+                    type: array
+                    items: { $ref: "#/components/schemas/DocumentSummary" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/vault/graph:
+    get:
+      tags: [vault]
+      operationId: vaultGraph
+      summary: The full wikilink graph for a brain (nodes + edges).
+      parameters:
+        - $ref: "#/components/parameters/BrainQuery"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Graph" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/vault/changes:
+    get:
+      tags: [vault]
+      operationId: vaultChanges
+      summary: Tail of the vault changelog since a given timestamp.
+      parameters:
+        - $ref: "#/components/parameters/BrainQuery"
+        - name: since
+          in: query
+          description: ISO-8601 timestamp; only changes AFTER this are returned.
+          schema: { type: string, format: date-time }
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  changes:
+                    type: array
+                    items: { $ref: "#/components/schemas/ChangeLogEntry" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/vault/reindex:
+    post:
+      tags: [vault]
+      operationId: reindexBrain
+      summary: Rebuild search vectors, wikilinks, and embeddings for a brain.
+      parameters:
+        - $ref: "#/components/parameters/BrainQuery"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reindexed: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/vault/rebuild-links:
+    post:
+      tags: [vault]
+      operationId: rebuildLinks
+      summary: Rebuild only the wikilink graph for a brain.
+      parameters:
+        - $ref: "#/components/parameters/BrainQuery"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  linksBuilt: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/vault/files/list:
+    get:
+      tags: [vault-files]
+      operationId: listFiles
+      summary: List binary files in a brain.
+      parameters:
+        - $ref: "#/components/parameters/BrainQuery"
+        - name: directory
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  files:
+                    type: array
+                    items: { $ref: "#/components/schemas/VaultFile" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/vault/files/read:
+    get:
+      tags: [vault-files]
+      operationId: readFile
+      summary: Get a file's metadata and a short-lived download URL.
+      parameters:
+        - $ref: "#/components/parameters/BrainQuery"
+        - name: id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VaultFileWithDownloadUrl" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/vault/files/presign-upload:
+    post:
+      tags: [vault-files]
+      operationId: presignUpload
+      summary: Request a short-lived S3 upload URL.
+      parameters:
+        - $ref: "#/components/parameters/BrainQuery"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [filename, mimeType]
+              properties:
+                filename: { type: string }
+                mimeType: { type: string }
+                sizeBytes: { type: integer }
+                category: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  uploadUrl: { type: string }
+                  key: { type: string }
+                  headers:
+                    type: object
+                    additionalProperties: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/vault/files/confirm-upload:
+    post:
+      tags: [vault-files]
+      operationId: confirmUpload
+      summary: Finalize an upload after the client PUTs to the presigned URL.
+      parameters:
+        - $ref: "#/components/parameters/BrainQuery"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key, filename, mimeType]
+              properties:
+                key: { type: string }
+                filename: { type: string }
+                mimeType: { type: string }
+                sizeBytes: { type: integer }
+                category: { type: string }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VaultFile" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/vault/files/delete:
+    post:
+      tags: [vault-files]
+      operationId: deleteFile
+      summary: Delete a file by id.
+      parameters:
+        - $ref: "#/components/parameters/BrainQuery"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted: { type: boolean }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: API key (aju_live_… or aju_test_…)
+
+  parameters:
+    BrainIdPath:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+    BrainQuery:
+      name: brain
+      in: query
+      description: Brain name. Omit to target the caller's default brain.
+      schema: { type: string }
+    BrainsQuery:
+      name: brain
+      in: query
+      description: |
+        Target brain(s). Accepts a single name, comma-separated list,
+        repeated query param, or the literal "all". Omit for the default.
+      schema: { type: string }
+    Query:
+      name: q
+      in: query
+      required: true
+      schema: { type: string }
+    Path:
+      name: path
+      in: query
+      required: true
+      schema: { type: string }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, default: 20, maximum: 100 }
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: Missing or invalid API key
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: Authenticated but not authorized for this brain or action
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Conflict:
+      description: Resource already exists
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        details: { type: string }
+
+    Brain:
+      type: object
+      required: [id, name, type]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        type:
+          type: string
+          enum: [personal, org]
+        role:
+          type: string
+          enum: [owner, editor, viewer]
+        documentCount: { type: integer }
+        createdAt: { type: string, format: date-time }
+
+    DocumentWrite:
+      type: object
+      required: [path, content, source]
+      properties:
+        path:
+          type: string
+          description: Vault path, e.g. "journal/2026-04-24.md".
+        content:
+          type: string
+          description: Markdown body including optional YAML frontmatter.
+        source:
+          type: string
+          description: Free-form label for the origin of this write (e.g. "cli", "sdk-ts").
+
+    Document:
+      type: object
+      required: [id, path, title, brainId]
+      properties:
+        id: { type: string }
+        brainId: { type: string }
+        path: { type: string }
+        title: { type: string }
+        content: { type: string }
+        contentHash: { type: string }
+        docType: { type: string, nullable: true }
+        docStatus: { type: string, nullable: true }
+        section: { type: string, nullable: true }
+        directory: { type: string, nullable: true }
+        tags:
+          type: array
+          items: { type: string }
+        wikilinks:
+          type: array
+          items: { type: string }
+        frontmatter:
+          type: object
+          additionalProperties: true
+          nullable: true
+        wordCount: { type: integer }
+        fileModified: { type: string, format: date-time }
+        syncedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    DocumentSummary:
+      type: object
+      required: [id, path, title]
+      properties:
+        id: { type: string }
+        path: { type: string }
+        title: { type: string }
+        section: { type: string, nullable: true }
+        directory: { type: string, nullable: true }
+        docType: { type: string, nullable: true }
+        docStatus: { type: string, nullable: true }
+        tags:
+          type: array
+          items: { type: string }
+        wordCount: { type: integer }
+        updatedAt: { type: string, format: date-time }
+
+    SearchResult:
+      type: object
+      required: [id, path, title]
+      properties:
+        id: { type: string }
+        path: { type: string }
+        title: { type: string }
+        section: { type: string, nullable: true }
+        docType: { type: string, nullable: true }
+        docStatus: { type: string, nullable: true }
+        tags:
+          type: array
+          items: { type: string }
+        wordCount: { type: integer }
+        sourceType:
+          type: string
+          enum: [document, file]
+        mimeType: { type: string, nullable: true }
+        brain: { type: string, nullable: true }
+        rank: { type: number, format: float }
+        snippet: { type: string }
+
+    SearchResponse:
+      type: object
+      required: [query, count, results]
+      properties:
+        query: { type: string }
+        brains:
+          type: array
+          items: { type: string }
+        count: { type: integer }
+        results:
+          type: array
+          items: { $ref: "#/components/schemas/SearchResult" }
+
+    RelatedDocument:
+      type: object
+      properties:
+        path: { type: string }
+        title: { type: string }
+        score: { type: number, format: float }
+        reason:
+          type: string
+          enum: [wikilink, backlink, tag, embedding]
+
+    Graph:
+      type: object
+      properties:
+        nodes:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              path: { type: string }
+              title: { type: string }
+        edges:
+          type: array
+          items:
+            type: object
+            properties:
+              from: { type: string }
+              to: { type: string }
+
+    ChangeLogEntry:
+      type: object
+      properties:
+        id: { type: string }
+        brainId: { type: string }
+        documentId: { type: string, nullable: true }
+        path: { type: string }
+        operation:
+          type: string
+          enum: [insert, update, delete]
+        source: { type: string }
+        changedBy: { type: string }
+        createdAt: { type: string, format: date-time }
+
+    VaultFile:
+      type: object
+      required: [id, filename, mimeType]
+      properties:
+        id: { type: string }
+        brainId: { type: string }
+        filename: { type: string }
+        mimeType: { type: string }
+        sizeBytes: { type: integer }
+        category: { type: string, nullable: true }
+        tags:
+          type: array
+          items: { type: string }
+        s3Key: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    VaultFileWithDownloadUrl:
+      allOf:
+        - $ref: "#/components/schemas/VaultFile"
+        - type: object
+          properties:
+            downloadUrl: { type: string }
+            downloadUrlExpiresAt: { type: string, format: date-time }

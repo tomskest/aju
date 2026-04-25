@@ -1,0 +1,198 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #050608;
+  --color-panel: #0e0f12;
+  --color-ink: #ececee;
+  --color-muted: #a8a8b0;
+  --color-faint: #6e6e76;
+  --color-accent: #22c55e;
+  --color-accent-soft: rgba(34, 197, 94, 0.14);
+  --color-rain: rgba(96, 232, 120, 0.16);
+  --color-rain-strong: rgba(96, 232, 120, 0.34);
+
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+html,
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  color-scheme: dark;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background: var(--color-accent-soft);
+  color: var(--color-ink);
+}
+
+/* Subtle pulse on the live dot */
+@keyframes aju-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.55; transform: scale(0.88); }
+}
+.aju-pulse {
+  animation: aju-pulse 1.8s ease-in-out infinite;
+}
+
+/* Matrix-style fall for the wikilink rain columns.
+ * Each column is rendered with its content duplicated so translating
+ * from -50% to 0% produces a seamless loop. */
+@keyframes aju-fall {
+  from { transform: translateY(-50%); }
+  to   { transform: translateY(0); }
+}
+
+/* Knowledge base prose styles — terse, mono-accented, muted.
+ * Applied by `KbProse` to HTML produced by the Marked renderer. */
+.kb-prose {
+  color: var(--color-ink);
+  font-size: 14.5px;
+  line-height: 1.75;
+}
+.kb-prose > :first-child { margin-top: 0; }
+.kb-prose > :last-child { margin-bottom: 0; }
+
+.kb-prose p {
+  margin: 1rem 0;
+  color: var(--color-muted);
+}
+.kb-prose strong { color: var(--color-ink); font-weight: 500; }
+.kb-prose em { color: var(--color-ink); font-style: italic; }
+
+.kb-prose h1,
+.kb-prose h2,
+.kb-prose h3,
+.kb-prose h4,
+.kb-prose h5,
+.kb-prose h6 {
+  color: var(--color-ink);
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+  margin: 2.25rem 0 0.75rem;
+}
+.kb-prose h1 { font-size: 28px; letter-spacing: -0.02em; }
+.kb-prose h2 { font-size: 22px; }
+.kb-prose h3 { font-size: 17px; }
+.kb-prose h4 { font-size: 15px; }
+.kb-prose h5,
+.kb-prose h6 {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--color-faint);
+}
+
+.kb-prose a {
+  color: var(--color-accent);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(34, 197, 94, 0.3);
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+.kb-prose a:hover {
+  border-bottom-color: var(--color-accent);
+  color: var(--color-ink);
+}
+
+.kb-prose ul,
+.kb-prose ol {
+  margin: 1rem 0;
+  padding-left: 1.25rem;
+  color: var(--color-muted);
+}
+.kb-prose ul { list-style: none; }
+.kb-prose ul > li { position: relative; padding-left: 1rem; }
+.kb-prose ul > li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.7em;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--color-faint);
+}
+.kb-prose ol { list-style: decimal; }
+.kb-prose ol > li::marker {
+  color: var(--color-faint);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.kb-prose li { margin: 0.35rem 0; }
+.kb-prose li > p { margin: 0.35rem 0; }
+
+.kb-prose code {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--color-ink);
+  background: var(--color-panel);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+.kb-prose pre {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--color-ink);
+  background: var(--color-panel);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+  padding: 1rem 1.1rem;
+  overflow-x: auto;
+  margin: 1.25rem 0;
+}
+.kb-prose pre code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  border-radius: 0;
+}
+
+.kb-prose blockquote {
+  margin: 1.25rem 0;
+  padding: 0.25rem 0 0.25rem 1rem;
+  border-left: 2px solid var(--color-accent);
+  color: var(--color-muted);
+  font-style: normal;
+}
+
+.kb-prose hr {
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  margin: 2rem 0;
+}
+
+.kb-prose table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.25rem 0;
+  font-size: 13px;
+}
+.kb-prose th,
+.kb-prose td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.kb-prose th {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--color-faint);
+  font-weight: 400;
+}
+.kb-prose td { color: var(--color-muted); }
+
+.kb-prose img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}

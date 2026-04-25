@@ -1,0 +1,11 @@
+# Local build output
+aju
+aju-*
+!*.go
+!*.md
+!Makefile
+
+# Go tooling
+*.test
+*.out
+coverage.*

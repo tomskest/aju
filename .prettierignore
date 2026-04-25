@@ -1,0 +1,11 @@
+node_modules
+.next
+prisma/control/migrations
+prisma/tenant/migrations
+workers
+apps/cli
+package-lock.json
+*.tsbuildinfo
+next-env.d.ts
+dist
+coverage

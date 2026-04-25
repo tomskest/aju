@@ -1,0 +1,36 @@
+node_modules/
+.next/
+
+# Env
+.env
+.env.local
+.env.*.local
+.mcp.json
+
+# Editors / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build / cache
+dist/
+build/
+coverage/
+.turbo/
+.eslintcache
+*.tsbuildinfo
+next-env.d.ts
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Playwright / Vitest
+test-results/
+playwright-report/

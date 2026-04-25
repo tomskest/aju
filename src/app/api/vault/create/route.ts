@@ -1,0 +1,113 @@
+import { NextResponse } from "next/server";
+import type { Prisma } from "@prisma/client-tenant";
+import { parseDocument } from "@/lib/vault";
+import { scheduleRebuildLinks } from "@/lib/vault";
+import { updateDocumentEmbedding } from "@/lib/embeddings";
+import { resolveBrain, isBrainError, canWrite } from "@/lib/vault";
+import { enforceDocumentsPerBrainLimit } from "@/lib/billing";
+import { authedTenantRoute } from "@/lib/route-helpers";
+
+export const POST = authedTenantRoute(
+  async ({ req, tenant, tx, user, principal }) => {
+    const brain = await resolveBrain(tx, req, principal);
+    if (isBrainError(brain)) return brain;
+
+    if (!canWrite(brain)) {
+      return NextResponse.json(
+        { error: "Write access denied for this brain" },
+        { status: 403 },
+      );
+    }
+
+    // Plan-limit gate: documentsPerBrain. Agent principals inherit the user
+    // slot's tier (the user is the human who minted the agent key).
+    //
+    // Uses `tx` so the count shares the open interactive transaction instead
+    // of racing it on a separate pgbouncer connection.
+    const limitErr = await enforceDocumentsPerBrainLimit(
+      tx,
+      brain.brainId,
+      user.id,
+    );
+    if (limitErr) return limitErr;
+
+    const body = await req.json();
+    const { path, content, source } = body as {
+      path?: string;
+      content?: string;
+      source?: string;
+    };
+
+    if (!path || !content || !source) {
+      return NextResponse.json(
+        { error: "Missing required fields: path, content, source" },
+        { status: 400 },
+      );
+    }
+
+    const existing = await tx.vaultDocument.findFirst({
+      where: { brainId: brain.brainId, path },
+    });
+
+    if (existing) {
+      return NextResponse.json(
+        { error: `Document already exists: ${path}` },
+        { status: 409 },
+      );
+    }
+
+    const parsed = parseDocument(content, path);
+
+    const doc = await tx.vaultDocument.create({
+      data: {
+        brainId: brain.brainId,
+        path,
+        title: parsed.title,
+        frontmatter: (parsed.frontmatter ?? undefined) as
+          | Prisma.InputJsonValue
+          | undefined,
+        docType: parsed.docType,
+        docStatus: parsed.docStatus,
+        tags: parsed.tags,
+        content: parsed.content,
+        contentHash: parsed.contentHash,
+        wordCount: parsed.wordCount,
+        directory: parsed.directory,
+        section: parsed.section,
+        wikilinks: parsed.wikilinks,
+        fileModified: new Date(),
+        syncedAt: new Date(),
+      },
+    });
+    await tx.vaultChangeLog.create({
+      data: {
+        brainId: brain.brainId,
+        documentId: doc.id,
+        path,
+        operation: "insert",
+        source,
+        changedBy: principal.identity,
+      },
+    });
+
+    // Bulk-ingest callers (importers, benchmark harnesses) can set
+    // ?defer_index=1 to skip the per-create link rebuild + embedding
+    // generation. They're expected to call POST /api/vault/reindex once
+    // after the import completes, which handles links + embeddings + FTS in
+    // one batched pass. Without this flag, a 50-doc import triggers 50
+    // rebuilds and 50 Voyage calls, which serialize on the per-brain
+    // advisory lock and the embedding queue.
+    const deferIndex = req.nextUrl.searchParams.get("defer_index") === "1";
+
+    if (!deferIndex) {
+      scheduleRebuildLinks(tenant, brain.brainId).catch((err) =>
+        console.error("Link rebuild after create failed:", err),
+      );
+      updateDocumentEmbedding(tenant, doc.id).catch((err) =>
+        console.error("Embedding after create failed:", err),
+      );
+    }
+
+    return NextResponse.json(doc, { status: 201 });
+  },
+);

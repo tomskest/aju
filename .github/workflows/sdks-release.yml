@@ -1,0 +1,205 @@
+name: sdks-release
+
+# Publishes all three SDKs from a single release tag so they stay in lockstep.
+# Tag format: sdks-v<semver>, e.g. sdks-v0.1.0.
+#
+# Flow:
+#   1. verify  — extract version from tag, confirm package.json + pyproject.toml
+#                both declare that version. Fails early if not in sync.
+#   2. npm     — `npm publish` @aju/sdk to the public npm registry.
+#   3. pypi    — build wheel/sdist for aju, publish via PyPI trusted publishing
+#                (OIDC; no long-lived token).
+#   4. go      — push `sdks/go/v<version>` tag so proxy.golang.org picks up
+#                the module version.
+#   5. release — create a GitHub Release summarising what was published.
+#
+# Secrets / config required (one-time):
+#   - NPM_TOKEN      — npm automation token with publish rights on the @aju scope.
+#   - PyPI trusted publisher configured for project "aju" pointing at this
+#     repo + this workflow filename + the `pypi` environment.
+
+on:
+  push:
+    tags:
+      - "sdks-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to simulate (e.g. sdks-v0.1.0). Manual runs do NOT publish — they only verify and build."
+        required: false
+        default: "sdks-v0.0.0-manual"
+
+jobs:
+  verify:
+    name: Verify version + lockstep
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      publish: ${{ steps.resolve.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version from tag
+        id: resolve
+        run: |
+          REF_NAME="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          case "$REF_NAME" in
+            sdks-v*) VERSION="${REF_NAME#sdks-v}" ;;
+            *)       VERSION="$REF_NAME"          ;;
+          esac
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == refs/tags/sdks-v* ]]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Resolved version: $VERSION (publish: $GITHUB_EVENT_NAME)"
+
+      - name: Check package.json version
+        run: |
+          EXPECTED="${{ steps.resolve.outputs.version }}"
+          ACTUAL=$(node -p "require('./sdks/typescript/package.json').version")
+          if [[ "$EXPECTED" != "$ACTUAL" ]]; then
+            echo "::error::sdks/typescript/package.json version ($ACTUAL) != tag version ($EXPECTED)"
+            exit 1
+          fi
+          echo "TS version $ACTUAL matches tag"
+
+      - name: Check pyproject.toml version
+        run: |
+          EXPECTED="${{ steps.resolve.outputs.version }}"
+          ACTUAL=$(grep -E '^version = ' sdks/python/pyproject.toml | head -1 | sed -E 's/version = "(.*)"/\1/')
+          if [[ "$EXPECTED" != "$ACTUAL" ]]; then
+            echo "::error::sdks/python/pyproject.toml version ($ACTUAL) != tag version ($EXPECTED)"
+            exit 1
+          fi
+          echo "Python version $ACTUAL matches tag"
+
+  npm:
+    name: Publish @aju/sdk to npm
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+          cache: "npm"
+          cache-dependency-path: sdks/typescript/package-lock.json
+
+      - name: Install + build
+        working-directory: sdks/typescript
+        run: |
+          npm ci
+          npm run build
+
+      - name: Publish (dry-run on manual dispatch)
+        working-directory: sdks/typescript
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [[ "${{ needs.verify.outputs.publish }}" == "true" ]]; then
+            npm publish --access public
+          else
+            echo "Manual dispatch — skipping publish. Running npm pack as sanity check."
+            npm pack --dry-run
+          fi
+
+  pypi:
+    name: Publish aju to PyPI
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # required for PyPI trusted publishing (OIDC)
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build wheel + sdist
+        working-directory: sdks/python
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+
+      - name: Publish to PyPI
+        if: needs.verify.outputs.publish == 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: sdks/python/dist/
+
+      - name: Skip publish (manual dispatch)
+        if: needs.verify.outputs.publish != 'true'
+        run: |
+          echo "Manual dispatch — skipping PyPI upload."
+          ls -la sdks/python/dist/
+
+  go:
+    name: Tag Go module
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # required to push the sdks/go/vX.Y.Z tag
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache-dependency-path: sdks/go/go.sum
+
+      - name: Verify Go module builds
+        working-directory: sdks/go
+        run: |
+          go build ./...
+          go vet ./...
+
+      - name: Push sdks/go/v<version> tag
+        if: needs.verify.outputs.publish == 'true'
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          TAG="sdks/go/v${VERSION}"
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "Tag ${TAG} already exists — skipping."
+            exit 0
+          fi
+          git tag "${TAG}"
+          git push origin "${TAG}"
+          echo "Pushed ${TAG} — proxy.golang.org will pick it up on first \`go get\`."
+
+      - name: Skip tag (manual dispatch)
+        if: needs.verify.outputs.publish != 'true'
+        run: echo "Manual dispatch — skipping git tag."
+
+  release:
+    name: GitHub Release
+    needs: [verify, npm, pypi, go]
+    runs-on: ubuntu-latest
+    if: needs.verify.outputs.publish == 'true'
+    permissions:
+      contents: write
+    steps:
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            SDK release `v${{ needs.verify.outputs.version }}`.
+
+            - **TypeScript** — `npm install @aju/sdk@${{ needs.verify.outputs.version }}`
+            - **Python** — `pip install aju==${{ needs.verify.outputs.version }}`
+            - **Go** — `go get github.com/tomskest/aju/sdks/go/ajuclient@v${{ needs.verify.outputs.version }}`
+
+            All three are generated from `sdks/openapi/openapi.yaml` at this commit.

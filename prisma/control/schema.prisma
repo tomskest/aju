@@ -1,0 +1,381 @@
+// Control-plane schema.
+//
+// Houses global identity (User, Session, Account, Verification), org-level
+// metadata (Organization, Membership, Invitation, Domain, AccessRequest),
+// OAuth infrastructure, ApiKey, DeviceCode, WaitlistEntry, and the new
+// Tenant mapping table that pins an org to its per-tenant Postgres DB.
+//
+// Tenant-scoped data (Brain, VaultDocument, etc.) lives in prisma/tenant/
+// and is written to per-org databases provisioned by src/lib/tenant-provision.ts.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Identity (Better-Auth + grandfather cohort) ----------
+
+model User {
+  id            String   @id
+  name          String
+  email         String   @unique
+  emailVerified Boolean  @default(false) @map("email_verified")
+  image         String?
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // aju-specific
+  grandfatheredAt DateTime? @map("grandfathered_at")
+  planTier        String    @default("free") @map("plan_tier")
+  personalOrgId   String?   @unique @map("personal_org_id")
+
+  accounts    Account[]
+  sessions    Session[]
+  apiKeys     ApiKey[]
+  personalOrg Organization?            @relation("UserPersonalOrg", fields: [personalOrgId], references: [id])
+  ownedOrgs   Organization[]           @relation("OrgOwner")
+  memberships OrganizationMembership[]
+
+  @@index([grandfatheredAt])
+  @@map("user")
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime @map("expires_at")
+  token     String   @unique
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  ipAddress String?  @map("ip_address")
+  userAgent String?  @map("user_agent")
+  userId    String   @map("user_id")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id
+  accountId             String    @map("account_id")
+  providerId            String    @map("provider_id")
+  userId                String    @map("user_id")
+  accessToken           String?   @map("access_token")
+  refreshToken          String?   @map("refresh_token")
+  idToken               String?   @map("id_token")
+  accessTokenExpiresAt  DateTime? @map("access_token_expires_at")
+  refreshTokenExpiresAt DateTime? @map("refresh_token_expires_at")
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("account")
+}
+
+model Verification {
+  id         String    @id
+  identifier String
+  value      String
+  expiresAt  DateTime  @map("expires_at")
+  createdAt  DateTime? @default(now()) @map("created_at")
+  updatedAt  DateTime? @updatedAt @map("updated_at")
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+// ---------- CLI / API-key auth ----------
+
+model ApiKey {
+  id         String    @id
+  prefix     String    @unique // first 12 chars of plaintext, shown to the user
+  hash       String // scrypt hash of the remainder, stored as "<salt-hex>:<hash-hex>"
+  name       String
+  userId     String    @map("user_id")
+  scopes     Json      @default("[\"read\",\"write\"]")
+  lastUsedAt DateTime? @map("last_used_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  expiresAt  DateTime? @map("expires_at")
+  revokedAt  DateTime? @map("revoked_at")
+
+  // Denormalized routing info — used by /api/mcp to resolve the tenant client
+  // without an extra join. Nullable during the transition; enforced non-null
+  // in the cutover migration.
+  organizationId String? @map("organization_id")
+
+  // When set, the key authenticates AS an agent (non-human principal) rather
+  // than as the owning user. The agent row lives in the org's tenant DB at
+  // agent.id — no FK because of the cross-DB boundary. `userId` remains the
+  // human who minted this key (for audit + revocation), but tenant queries
+  // see the agent's BrainAccess grants, not the user's.
+  agentId String? @map("agent_id")
+
+  // Source of the key: "api" = minted via CLI/device flow; "oauth" = issued by
+  // the built-in OAuth 2.1 authorization server at /oauth/token. OAuth keys
+  // are scoped to a client and paired with a refresh token stored separately.
+  source             String    @default("api")
+  oauthClientId      String?   @map("oauth_client_id")
+  refreshTokenPrefix String?   @unique @map("refresh_token_prefix")
+  refreshTokenHash   String?   @map("refresh_token_hash")
+  refreshExpiresAt   DateTime? @map("refresh_expires_at")
+  // RFC 8707 audience. When set, /api/mcp validates the request is for this
+  // resource before honoring the token. Only populated for OAuth-issued keys.
+  audience           String?
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  oauthClient  OAuthClient?  @relation(fields: [oauthClientId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([oauthClientId])
+  @@index([agentId])
+  @@map("api_key")
+}
+
+// ---------- OAuth 2.1 authorization server ----------
+
+model OAuthClient {
+  id                      String   @id @default(cuid())
+  clientId                String   @unique @map("client_id")
+  clientSecretHash        String?  @map("client_secret_hash") // null = public (PKCE-only) client
+  clientName              String   @map("client_name")
+  redirectUris            String[] @map("redirect_uris")
+  grantTypes              String[] @default(["authorization_code", "refresh_token"]) @map("grant_types")
+  tokenEndpointAuthMethod String   @default("none") @map("token_endpoint_auth_method")
+  scope                   String   @default("read write")
+  clientUri               String?  @map("client_uri")
+  logoUri                 String?  @map("logo_uri")
+  softwareId              String?  @map("software_id")
+  softwareVersion         String?  @map("software_version")
+  createdAt               DateTime @default(now()) @map("created_at")
+  updatedAt               DateTime @updatedAt @map("updated_at")
+  registeredByIp          String?  @map("registered_by_ip")
+
+  authorizationCodes OAuthAuthorizationCode[]
+  apiKeys            ApiKey[]
+
+  @@index([createdAt])
+  @@map("oauth_client")
+}
+
+model OAuthAuthorizationCode {
+  id                  String    @id @default(cuid())
+  codeHash            String    @unique @map("code_hash")
+  clientId            String    @map("client_id")
+  userId              String    @map("user_id")
+  organizationId      String?   @map("organization_id")
+  redirectUri         String    @map("redirect_uri")
+  scope               String
+  resource            String?
+  codeChallenge       String    @map("code_challenge")
+  codeChallengeMethod String    @default("S256") @map("code_challenge_method")
+  expiresAt           DateTime  @map("expires_at")
+  consumedAt          DateTime? @map("consumed_at")
+  createdAt           DateTime  @default(now()) @map("created_at")
+
+  client OAuthClient @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("oauth_authorization_code")
+}
+
+model DeviceCode {
+  id               String   @id
+  userCode         String   @unique @map("user_code")
+  deviceCode       String   @unique @map("device_code")
+  approvedByUserId String?  @map("approved_by_user_id")
+  apiKeyId         String?  @map("api_key_id")
+  apiKeyPlaintext  String?  @map("api_key_plaintext")
+  status           String   @default("pending") // pending | approved | denied | expired | used
+  expiresAt        DateTime @map("expires_at")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  // Provisioning intent. "user" mints a personal API key for the approver
+  // (original `aju login` flow). "agent" mints an agent-scoped key and
+  // requires the approver to be owner/admin of the agent's org. `agentName`
+  // is the hint the CLI passed at start; resolution to `agentId` happens
+  // at approve time against the approver's active org.
+  intent    String  @default("user") // user | agent
+  agentName String? @map("agent_name")
+  agentId   String? @map("agent_id")
+
+  organizationId String? @map("organization_id")
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([status, expiresAt])
+  @@index([organizationId])
+  @@map("device_code")
+}
+
+// ---------- Beta overflow ----------
+
+model WaitlistEntry {
+  id        String    @id @default(cuid())
+  email     String    @unique
+  source    String? // 'landing', 'referral', etc.
+  position  BigInt    @default(autoincrement())
+  createdAt DateTime  @default(now()) @map("created_at")
+  invitedAt DateTime? @map("invited_at")
+
+  @@index([invitedAt])
+  @@map("waitlist_entry")
+}
+
+// ---------- Organizations, membership, invitations, domains, access requests ----------
+
+model Organization {
+  id                       String   @id @default(cuid())
+  name                     String
+  slug                     String   @unique
+  isPersonal               Boolean  @default(false) @map("is_personal")
+  ownerUserId              String   @map("owner_user_id")
+  planTier                 String   @default("beta_legacy") @map("plan_tier")
+  autoAcceptDomainRequests Boolean  @default(false) @map("auto_accept_domain_requests")
+  createdAt                DateTime @default(now()) @map("created_at")
+  updatedAt                DateTime @updatedAt @map("updated_at")
+
+  owner          User                     @relation("OrgOwner", fields: [ownerUserId], references: [id])
+  memberships    OrganizationMembership[]
+  invitations    Invitation[]
+  domains        OrganizationDomain[]
+  accessRequests AccessRequest[]
+  apiKeys        ApiKey[]
+  deviceCodes    DeviceCode[]
+  personalOfUser User?                    @relation("UserPersonalOrg")
+  tenant         Tenant?
+
+  @@index([ownerUserId])
+  @@index([isPersonal])
+  @@map("organization")
+}
+
+model OrganizationMembership {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  userId         String    @map("user_id")
+  role           String    @default("member") // owner | admin | member
+  invitedBy      String?   @map("invited_by")
+  invitedAt      DateTime? @map("invited_at")
+  acceptedAt     DateTime? @map("accepted_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+  @@index([organizationId, role])
+  @@map("organization_membership")
+}
+
+model Invitation {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  email          String
+  role           String    @default("member")
+  tokenHash      String    @unique @map("token_hash")
+  expiresAt      DateTime  @map("expires_at")
+  acceptedAt     DateTime? @map("accepted_at")
+  createdBy      String    @map("created_by")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([email])
+  @@index([organizationId])
+  @@map("invitation")
+}
+
+model OrganizationDomain {
+  id                 String    @id @default(cuid())
+  organizationId     String    @map("organization_id")
+  domain             String    @unique
+  verifiedAt         DateTime? @map("verified_at")
+  verificationMethod String?   @map("verification_method") // email_match | dns_txt | admin_override
+  claimedByUserId    String?   @map("claimed_by_user_id")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@map("organization_domain")
+}
+
+model AccessRequest {
+  id               String    @id @default(cuid())
+  organizationId   String    @map("organization_id")
+  requestingUserId String    @map("requesting_user_id")
+  email            String
+  status           String    @default("pending") // pending | approved | denied | expired | canceled
+  requestedRole    String    @default("member") @map("requested_role")
+  message          String?
+  reviewedBy       String?   @map("reviewed_by")
+  reviewedAt       DateTime? @map("reviewed_at")
+  expiresAt        DateTime  @map("expires_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, requestingUserId], map: "access_request_org_requester_unique")
+  @@index([organizationId, status])
+  @@index([requestingUserId])
+  @@map("access_request")
+}
+
+// ---------- Tenant routing (org → per-tenant Postgres DB) ----------
+
+model Tenant {
+  id             String   @id @default(cuid())
+  organizationId String   @unique @map("organization_id")
+  databaseName   String   @map("database_name") // e.g. "org_cmxyz123"
+  region         String   @default("aws-eu-central-1")
+
+  // Both DSNs AES-GCM encrypted at rest with TENANT_DSN_ENC_KEY.
+  // Direct = Prisma migrate / DDL (prepared statements, session state).
+  // Pooled = runtime (PgBouncer, transaction mode). Append ?pgbouncer=true.
+  dsnDirectEnc String @map("dsn_direct_enc")
+  dsnPooledEnc String @map("dsn_pooled_enc")
+
+  // Bumped by scripts/tenant-migrate.ts after a successful migrate deploy.
+  // Compared against a code-side constant at request time; drift flips the
+  // tenant into read-only mode with a user-facing banner.
+  schemaVersion  Int       @default(0) @map("schema_version")
+  lastMigratedAt DateTime? @map("last_migrated_at")
+
+  status    String   @default("provisioning") // provisioning | active | suspended | archived
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Per-tenant object-storage config. Populated by
+  // scripts/provision-tigris-bucket.ts during operator-led org onboarding;
+  // loaded at runtime by src/lib/tenant-storage.ts. All nullable during
+  // rollout — tenants without a bucket fall back to the env-based shared
+  // bucket in the runtime (deletable once backfill completes).
+  storageBucket        String? @map("storage_bucket")
+  storageAccessKeyEnc  String? @map("storage_access_key_enc")
+  storageSecretKeyEnc  String? @map("storage_secret_key_enc")
+  storageEndpoint      String? @map("storage_endpoint")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@map("tenant")
+}

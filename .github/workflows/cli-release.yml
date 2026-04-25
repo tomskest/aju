@@ -1,0 +1,104 @@
+name: cli-release
+
+on:
+  push:
+    tags:
+      - "cli-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. cli-v0.1.0). Only used for manual dispatch; produces unsigned artifacts and no release."
+        required: false
+        default: "cli-v0.0.0-manual"
+
+jobs:
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: darwin
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: linux
+            goarch: amd64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: apps/cli/go.sum
+
+      - name: Resolve version
+        id: version
+        run: |
+          REF_NAME="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          # Strip the cli-v prefix; fall back to stripping just cli- if no v.
+          case "$REF_NAME" in
+            cli-v*) VERSION="${REF_NAME#cli-v}" ;;
+            cli-*)  VERSION="${REF_NAME#cli-}"  ;;
+            *)      VERSION="$REF_NAME"         ;;
+          esac
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: $VERSION"
+
+      - name: Build binary
+        working-directory: apps/cli
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          OUT="aju-${GOOS}-${GOARCH}"
+          go build -trimpath -ldflags "-s -w -X main.Version=${VERSION}" -o "../../dist/${OUT}" ./
+          ls -la "../../dist/"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aju-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/aju-${{ matrix.goos }}-${{ matrix.goarch }}
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/cli-v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Compute checksums
+        working-directory: dist
+        run: |
+          ls -la
+          sha256sum aju-* | tee checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            dist/aju-darwin-arm64
+            dist/aju-darwin-amd64
+            dist/aju-linux-arm64
+            dist/aju-linux-amd64
+            dist/checksums.txt

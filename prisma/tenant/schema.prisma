@@ -1,0 +1,190 @@
+// Tenant schema — applied to per-org databases provisioned by
+// src/lib/tenant-provision.ts. One database per organization.
+//
+// The database itself is the org boundary. Cross-DB FKs back to control
+// tables (User, Organization, Agent-in-other-tenant) are impossible in
+// Postgres, so user / agent references are denormalized as plain strings.
+// App-layer cleanup hooks keep them consistent:
+//   - OrganizationMembership delete → null out this user's refs in tenant
+//   - User delete → iterate memberships, null/reassign refs per tenant
+//
+// RLS lives in prisma/tenant/rls-policies.sql and gates on brain_id, not
+// organization_id (the DB boundary handles org scoping). Session variable:
+// app.current_brain_ids — comma-separated list of brain cuids, set via
+// SET LOCAL inside a transaction (see src/lib/tenant-context.ts).
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../node_modules/@prisma/client-tenant"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("TENANT_DATABASE_URL")
+}
+
+// ---------- Brains (vault containers) ----------
+
+model Brain {
+  id        String   @id @default(cuid())
+  name      String
+  type      String   @default("org") // org | personal
+  createdAt DateTime @default(now()) @map("created_at")
+
+  documents  VaultDocument[]
+  links      DocumentLink[]
+  files      VaultFile[]
+  changeLogs VaultChangeLog[]
+  access     BrainAccess[]
+
+  @@index([name])
+  @@map("brains")
+}
+
+model BrainAccess {
+  id      String @id @default(cuid())
+  brainId String @map("brain_id")
+
+  // Denormalized — User lives in the control DB, so no FK possible.
+  // Cleanup on user leave/delete runs app-side.
+  userId String? @map("user_id")
+
+  // Agent lives in this same tenant DB, so the FK is intact.
+  agentId String? @map("agent_id")
+
+  role      String   @default("viewer") // owner | editor | viewer
+  createdAt DateTime @default(now()) @map("created_at")
+
+  brain Brain  @relation(fields: [brainId], references: [id], onDelete: Cascade)
+  agent Agent? @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  // NOTE: userId is nullable so agent-only access rows can exist. Exactly
+  // one of (userId, agentId) must be set — the app layer enforces this
+  // (a CHECK constraint is added in prisma/tenant/rls-policies.sql).
+  @@unique([brainId, userId])
+  @@index([userId])
+  @@index([agentId])
+  @@map("brain_access")
+}
+
+model Agent {
+  id String @id @default(cuid())
+
+  name        String
+  description String?
+
+  // Denormalized — User lives in the control DB.
+  createdByUserId String @map("created_by_user_id")
+
+  status    String   @default("active") // active | paused | revoked
+  createdAt DateTime @default(now()) @map("created_at")
+
+  brainAccess BrainAccess[]
+
+  @@index([status])
+  @@map("agent")
+}
+
+model VaultDocument {
+  id          String   @id @default(cuid())
+  brainId     String   @map("brain_id")
+  path        String
+  title       String
+  frontmatter Json?
+  docType     String?  @map("doc_type")
+  docStatus   String?  @map("doc_status")
+  tags        String[]
+  content     String   @db.Text
+  contentHash String   @map("content_hash")
+  wordCount   Int      @default(0) @map("word_count")
+  directory   String
+  section     String
+  wikilinks   String[]
+
+  fileModified DateTime @map("file_modified")
+  syncedAt     DateTime @default(now()) @map("synced_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  brain         Brain            @relation(fields: [brainId], references: [id])
+  changeLogs    VaultChangeLog[]
+  outgoingLinks DocumentLink[]   @relation("outgoing")
+  incomingLinks DocumentLink[]   @relation("incoming")
+
+  @@unique([brainId, path])
+  @@index([brainId])
+  @@index([section])
+  @@index([docType])
+  @@index([docStatus])
+  @@index([directory])
+  @@map("vault_documents")
+}
+
+model DocumentLink {
+  id       String @id @default(cuid())
+  brainId  String @map("brain_id")
+  sourceId String @map("source_id")
+  targetId String @map("target_id")
+  linkType String @default("wikilink") @map("link_type")
+  linkText String @map("link_text")
+
+  brain  Brain         @relation(fields: [brainId], references: [id])
+  source VaultDocument @relation("outgoing", fields: [sourceId], references: [id], onDelete: Cascade)
+  target VaultDocument @relation("incoming", fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceId, targetId, linkText])
+  @@index([brainId])
+  @@index([sourceId])
+  @@index([targetId])
+  @@index([linkType])
+  @@map("document_links")
+}
+
+model VaultChangeLog {
+  id         String   @id @default(cuid())
+  brainId    String   @map("brain_id")
+  documentId String?  @map("document_id")
+  path       String
+  operation  String
+  source     String
+  changedBy  String?  @map("changed_by")
+  actorType  String?  @map("actor_type") // "user" | "agent" | "system"
+  actorId    String?  @map("actor_id") // user or agent cuid; user lives in control DB
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  brain    Brain          @relation(fields: [brainId], references: [id])
+  document VaultDocument? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+
+  @@index([brainId])
+  @@index([source, createdAt])
+  @@index([createdAt])
+  @@map("vault_change_log")
+}
+
+model VaultFile {
+  id            String   @id @default(cuid())
+  brainId       String   @map("brain_id")
+  s3Key         String   @unique @map("s3_key")
+  filename      String
+  mimeType      String   @map("mime_type")
+  sizeBytes     Int      @map("size_bytes")
+  category      String?
+  tags          String[]
+  extractedText String?  @map("extracted_text") @db.Text
+  textHash      String?  @map("text_hash")
+  metadata      Json?
+
+  // Denormalized — User lives in the control DB.
+  uploadedBy String? @map("uploaded_by")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  brain Brain @relation(fields: [brainId], references: [id])
+
+  @@index([brainId])
+  @@index([category])
+  @@index([mimeType])
+  @@index([createdAt])
+  @@map("vault_files")
+}

@@ -1,0 +1,55 @@
+name: backup
+
+# Manual-only by default. To enable nightly dumps at 02:00 UTC, uncomment the
+# `schedule:` block below — the user opts in to the cron separately from
+# merging this workflow.
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: "0 2 * * *"  # nightly 02:00 UTC — uncomment to activate
+
+permissions:
+  contents: read
+
+jobs:
+  pg-dump:
+    name: pg_dump → S3
+    runs-on: ubuntu-latest
+    # Dumps can be large; give them room beyond the default 6-hour limit.
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install postgresql-client-17
+        # Match the Postgres major version that pg_dump --format=custom writes
+        # against. Neon runs PG 17; docker-compose.yml also pins pg17.
+        # Upgrade this pin when the upstream server bumps.
+        run: |
+          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run pg_dump → S3
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          TENANT_DSN_ENC_KEY: ${{ secrets.TENANT_DSN_ENC_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_ENDPOINT_URL: ${{ secrets.AWS_ENDPOINT_URL }}
+          BACKUP_S3_BUCKET: ${{ secrets.BACKUP_S3_BUCKET }}
+          BACKUP_S3_PREFIX: ${{ secrets.BACKUP_S3_PREFIX }}
+          BACKUP_S3_KMS_KEY_ID: ${{ secrets.BACKUP_S3_KMS_KEY_ID }}
+        run: npm run backup:pg-dump

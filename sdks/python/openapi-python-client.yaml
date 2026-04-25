@@ -1,0 +1,5 @@
+# Config for openapi-python-client.
+# Generated package lands at aju/_generated/ — imported by aju/__init__.py.
+project_name_override: aju
+package_name_override: _generated
+use_path_prefixes_for_title_model_names: false

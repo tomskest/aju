@@ -1,0 +1,13 @@
+name = "aju-install"
+main = "src/index.ts"
+compatibility_date = "2026-04-01"
+workers_dev = false
+
+routes = [
+  { pattern = "install.aju.sh/*", zone_name = "aju.sh" }
+]
+
+[vars]
+GITHUB_REPO = "tomskest/aju"
+BINARY_NAME = "aju"
+DEFAULT_INSTALL_DIR = "$HOME/.local/bin"
