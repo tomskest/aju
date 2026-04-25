@@ -153,7 +153,20 @@ export async function withTenant<T>(
   if (params.unscoped) {
     const tenant = await tenantDbFor(params.organizationId);
     return tenant.$transaction(
-      async (tx) => fn({ tenant, tx, brainIds: [] }),
+      async (tx) => {
+        // Deliberate, transaction-local RLS bypass for maintenance paths
+        // (provisioning, brain-create seed writes, agent management on
+        // tables without brain_id, etc.). Pairs with the bypass clause in
+        // data/tenant/rls-policies.sql. Setting `is_local=true` ensures
+        // the bypass releases when the transaction commits or aborts —
+        // it cannot leak across requests on a pooled connection.
+        //
+        // Without this opt-in the policies fail closed: forgetting to
+        // scope = zero rows visible, which is the inversion of the
+        // earlier `IS NULL OR ...` permissive default.
+        await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', true)`;
+        return fn({ tenant, tx, brainIds: [] });
+      },
       params.timeoutMs
         ? { timeout: params.timeoutMs, maxWait: params.timeoutMs }
         : undefined,
