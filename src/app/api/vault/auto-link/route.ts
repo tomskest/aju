@@ -52,4 +52,9 @@ export const POST = authedTenantRoute(
       durationMs: Date.now() - start,
     };
   },
+  // autoLinkBrain loops over every doc — load candidates + update each one
+  // serially. On a brain with more than ~20 docs, this exceeds Prisma's
+  // default 5s interactive-tx timeout and rolls back with P2028. Match the
+  // reindex route's posture and give the parent tx 120s.
+  { timeoutMs: 120_000 },
 );

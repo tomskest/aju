@@ -87,8 +87,15 @@ export default async function BrainPage(props: PageProps) {
         });
         if (row) {
           const knownPaths = docRows.map((d) => d.path);
-          const md = resolveWikilinksToMarkdown(
+          // The page header already renders the title and frontmatter
+          // shouldn't show in prose — strip both before resolving wikilinks
+          // and rendering. Editor view still gets the full raw content.
+          const displayBody = stripFrontmatterAndLeadingH1(
             row.content,
+            row.title,
+          );
+          const md = resolveWikilinksToMarkdown(
+            displayBody,
             knownPaths,
             brain.name,
             row.path,
@@ -123,4 +130,31 @@ export default async function BrainPage(props: PageProps) {
       missingHint={missingHint}
     />
   );
+}
+
+/**
+ * Strip the frontmatter block and a leading `# Title` line so the prose
+ * view doesn't double up with the page header. Only removes the H1 when
+ * it matches the doc's stored title (case-insensitive, trimmed) — if a
+ * doc happens to start with a different H1, leave it alone.
+ */
+function stripFrontmatterAndLeadingH1(content: string, title: string): string {
+  let body = content;
+
+  if (body.startsWith("---\n")) {
+    const end = body.indexOf("\n---", 4);
+    if (end !== -1) {
+      const closer = body.indexOf("\n", end + 4);
+      body = closer === -1 ? "" : body.slice(closer + 1);
+    }
+  }
+
+  body = body.replace(/^\s+/, "");
+
+  const h1 = body.match(/^#\s+(.+?)\s*(?:\n|$)/);
+  if (h1 && h1[1].trim().toLowerCase() === title.trim().toLowerCase()) {
+    body = body.slice(h1[0].length).replace(/^\s+/, "");
+  }
+
+  return body;
 }
