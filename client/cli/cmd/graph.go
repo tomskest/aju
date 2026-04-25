@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"strconv"
@@ -268,6 +269,12 @@ func AutoLink(args []string) error {
 	if err != nil {
 		return err
 	}
+
+	// Server-side the route runs autoLinkBrain + rebuildLinks inside a
+	// Prisma interactive tx with timeoutMs=120s. The default 30s client
+	// timeout would kill the request before the server finishes on a
+	// brain with many docs — extend client-side past the server budget.
+	client.HTTP = &http.Client{Timeout: 3 * time.Minute}
 
 	target := "/api/vault/auto-link"
 	if b := resolveBrainFlag(*brain, cfg); b != "" {
