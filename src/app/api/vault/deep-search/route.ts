@@ -27,6 +27,18 @@ export const GET = authedTenantRoute(async ({ req, tx, principal }) => {
     );
   }
 
+  // No accessible brains → no seeds, no graph. Skip the embedding call and
+  // every downstream query.
+  if (brainIds.length === 0) {
+    return {
+      query: q,
+      seeds: 0,
+      count: 0,
+      results: [],
+      graph: { nodes: 0, edges: [] },
+    };
+  }
+
   const section = url.searchParams.get("section");
   const docType = url.searchParams.get("type");
   const seeds = Math.min(

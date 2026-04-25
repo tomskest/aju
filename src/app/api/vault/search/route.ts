@@ -18,6 +18,12 @@ export const GET = authedTenantRoute(async ({ req, tx, principal }) => {
     );
   }
 
+  // No accessible brains in scope → no results without round-tripping. Hits
+  // when ?brain=all is passed by a user with zero BrainAccess rows.
+  if (brainIds.length === 0) {
+    return { query: q, brains: [], count: 0, results: [] };
+  }
+
   const section = url.searchParams.get("section");
   const docType = url.searchParams.get("type");
   const docStatus = url.searchParams.get("status");

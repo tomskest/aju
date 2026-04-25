@@ -19,6 +19,12 @@ export const GET = authedTenantRoute(async ({ req, tx, principal }) => {
     );
   }
 
+  // No accessible brains in scope → return early. Avoids one DB round-trip
+  // (and a Voyage embedding call) for the zero-access ?brain=all case.
+  if (brainIds.length === 0) {
+    return { query: q, brains: [], count: 0, results: [] };
+  }
+
   const section = url.searchParams.get("section");
   const docType = url.searchParams.get("type");
   const mode = url.searchParams.get("mode") || "hybrid";
