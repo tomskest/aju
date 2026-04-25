@@ -5,6 +5,7 @@ import { prisma, tenantDbFor } from "@/lib/db";
 import { deleteOrganizationWithStorage } from "@/lib/vault";
 import { canManageOrg, canManageMembers, slugify } from "@/lib/tenant";
 import { authedOrgRoute } from "@/lib/route-helpers";
+import { clientIp, recordAudit } from "@/lib/audit";
 import { nameSchema, validateBody } from "@/lib/validators";
 
 export const runtime = "nodejs";
@@ -98,7 +99,7 @@ export const GET = authedOrgRoute<{ id: string }>(
  * gate to admin and check the rename gate inline.
  */
 export const PATCH = authedOrgRoute<{ id: string }>(
-  async ({ req, organizationId, role }) => {
+  async ({ req, user, organizationId, role }) => {
     const validation = await validateBody(req, patchOrgSchema);
     if (!validation.ok) return validation.response;
     const { name: newName, autoAcceptDomainRequests } = validation.value;
@@ -129,6 +130,15 @@ export const PATCH = authedOrgRoute<{ id: string }>(
       autoAcceptDomainRequests: boolean;
     } | null = null;
 
+    // Bump `version` on every successful update for optimistic-locking
+    // adopters (e.g. an `If-Match: <version>` header check on the next
+    // pass). Today we just maintain the counter; clients that want
+    // conflict detection can read it via GET and supply expected version.
+    const versionedUpdates: Prisma.OrganizationUpdateInput = {
+      ...updates,
+      version: { increment: 1 },
+    };
+
     if (wantsRename && newName) {
       const baseSlug = slugify(newName) || "org";
       let lastErr: unknown = null;
@@ -137,7 +147,7 @@ export const PATCH = authedOrgRoute<{ id: string }>(
         try {
           updated = await prisma.organization.update({
             where: { id: organizationId },
-            data: { ...updates, slug: candidate },
+            data: { ...versionedUpdates, slug: candidate },
             select: {
               id: true,
               name: true,
@@ -162,13 +172,38 @@ export const PATCH = authedOrgRoute<{ id: string }>(
     } else {
       updated = await prisma.organization.update({
         where: { id: organizationId },
-        data: updates,
+        data: versionedUpdates,
         select: {
           id: true,
           name: true,
           slug: true,
           autoAcceptDomainRequests: true,
         },
+      });
+    }
+
+    if (wantsRename) {
+      await recordAudit(prisma, {
+        eventType: "org.renamed",
+        actorUserId: user.id,
+        organizationId,
+        resourceType: "organization",
+        resourceId: organizationId,
+        changes: { after: { name: updated.name, slug: updated.slug } },
+        ipAddress: clientIp(req),
+      });
+    }
+    if (wantsFlagChange) {
+      await recordAudit(prisma, {
+        eventType: "org.flag_changed",
+        actorUserId: user.id,
+        organizationId,
+        resourceType: "organization",
+        resourceId: organizationId,
+        changes: {
+          after: { autoAcceptDomainRequests: updated.autoAcceptDomainRequests },
+        },
+        ipAddress: clientIp(req),
       });
     }
 
@@ -192,7 +227,7 @@ export const PATCH = authedOrgRoute<{ id: string }>(
  * block the delete with a 409 — the caller must remove or move them first.
  */
 export const DELETE = authedOrgRoute<{ id: string }>(
-  async ({ req, organizationId }) => {
+  async ({ req, user, organizationId }) => {
     const org = await prisma.organization.findUnique({
       where: { id: organizationId },
       select: { id: true, slug: true, isPersonal: true },
@@ -228,6 +263,20 @@ export const DELETE = authedOrgRoute<{ id: string }>(
         { status: 409 },
       );
     }
+
+    // Audit BEFORE the destructive op so the trail survives even if
+    // tenant teardown errors halfway. The audit row's organizationId FK
+    // becomes null when the org is dropped (ON DELETE SET NULL); the
+    // audit `resource_id` keeps the deleted org's id as a free string.
+    await recordAudit(prisma, {
+      eventType: "org.deleted",
+      actorUserId: user.id,
+      organizationId,
+      resourceType: "organization",
+      resourceId: organizationId,
+      changes: { before: { name: org.slug, slug: org.slug } },
+      ipAddress: clientIp(req),
+    });
 
     // Even with brainCount === 0 there can still be tenant infrastructure
     // (DB, role, stray files) to tear down. deleteOrganizationWithStorage

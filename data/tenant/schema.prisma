@@ -29,6 +29,9 @@ model Brain {
   id        String   @id @default(cuid())
   name      String
   type      String   @default("org") // org | personal
+  /// Optimistic-locking counter. Bumped on rename / type change so two
+  /// concurrent edits surface as P2025 instead of last-write-wins.
+  version   Int      @default(0)
   createdAt DateTime @default(now()) @map("created_at")
 
   documents  VaultDocument[]
@@ -61,7 +64,16 @@ model BrainAccess {
   // NOTE: userId is nullable so agent-only access rows can exist. Exactly
   // one of (userId, agentId) must be set — the app layer enforces this
   // (a CHECK constraint is added in prisma/tenant/rls-policies.sql).
+  //
+  // Both unique constraints rely on Postgres' default "NULLs distinct"
+  // behavior in unique indexes:
+  //   - (brainId, userId)  — user grants are unique; agentId-only rows
+  //     have userId=NULL and don't conflict on this index.
+  //   - (brainId, agentId) — agent grants are unique; user-only rows have
+  //     agentId=NULL and don't conflict on this index. Replaces the
+  //     advisory-lock workaround in `/api/agents/[id]/brains` POST.
   @@unique([brainId, userId])
+  @@unique([brainId, agentId])
   @@index([userId])
   @@index([agentId])
   @@map("brain_access")

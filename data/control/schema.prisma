@@ -39,6 +39,7 @@ model User {
   personalOrg Organization?            @relation("UserPersonalOrg", fields: [personalOrgId], references: [id])
   ownedOrgs   Organization[]           @relation("OrgOwner")
   memberships OrganizationMembership[]
+  auditEvents AuditEvent[]             @relation("UserAuditEvents")
 
   @@index([grandfatheredAt])
   @@map("user")
@@ -247,6 +248,9 @@ model Organization {
   ownerUserId              String   @map("owner_user_id")
   planTier                 String   @default("beta_legacy") @map("plan_tier")
   autoAcceptDomainRequests Boolean  @default(false) @map("auto_accept_domain_requests")
+  /// Optimistic-locking counter. Bump on every mutating update; check the
+  /// expected value in the WHERE clause to detect concurrent edits.
+  version                  Int      @default(0)
   createdAt                DateTime @default(now()) @map("created_at")
   updatedAt                DateTime @updatedAt @map("updated_at")
 
@@ -259,6 +263,7 @@ model Organization {
   deviceCodes    DeviceCode[]
   personalOfUser User?                    @relation("UserPersonalOrg")
   tenant         Tenant?
+  auditEvents    AuditEvent[]              @relation("OrgAuditEvents")
 
   @@index([ownerUserId])
   @@index([isPersonal])
@@ -270,6 +275,9 @@ model OrganizationMembership {
   organizationId String    @map("organization_id")
   userId         String    @map("user_id")
   role           String    @default("member") // owner | admin | member
+  /// Optimistic-locking counter. Bump on role updates so concurrent edits
+  /// surface as P2025 instead of last-write-wins.
+  version        Int       @default(0)
   invitedBy      String?   @map("invited_by")
   invitedAt      DateTime? @map("invited_at")
   acceptedAt     DateTime? @map("accepted_at")
@@ -378,4 +386,55 @@ model Tenant {
 
   @@index([status])
   @@map("tenant")
+}
+
+// ---------- Audit log (control plane) ----------
+
+/// Append-only forensic log of mutating operations on control-plane
+/// resources — key mints/revokes, role changes, org rename/delete, agent
+/// grants, OAuth token issuance, etc. Vault doc/file mutations live in the
+/// per-tenant `vault_change_log`; this table covers everything else.
+///
+/// FKs to user/organization use ON DELETE SET NULL so audit rows survive
+/// the deletion of the resource they reference. Forensic data must outlive
+/// the live row.
+model AuditEvent {
+  id              String   @id @default(cuid())
+  /// User who performed the action. Null when the actor was an agent or a
+  /// system path (cron, provisioning, env-key auth).
+  actorUserId     String?  @map("actor_user_id")
+  /// API key the request was authenticated with (if any). Null for cookie-
+  /// session actions and system paths.
+  actorApiKeyId   String?  @map("actor_api_key_id")
+  /// Set when the principal was an agent (key.agentId is not null).
+  /// Denormalized — Agent rows live in tenant DBs, no FK possible.
+  agentId         String?  @map("agent_id")
+  /// Org the event affects. Null for cross-org / pre-org actions.
+  organizationId  String?  @map("organization_id")
+  /// Stable string identifier (e.g. `key.minted`, `member.role_changed`,
+  /// `org.renamed`, `agent.granted`). New types extend the set freely.
+  eventType       String   @map("event_type")
+  /// Type of resource the event targets (`apikey`, `organization`,
+  /// `membership`, `agent`, `domain`, etc.). Loose enum.
+  resourceType    String?  @map("resource_type")
+  /// Primary-key id of the affected row. Stays valid even after the row
+  /// is deleted because we don't FK it.
+  resourceId      String?  @map("resource_id")
+  /// Optional before/after diff. JSON shape is event-specific and may be
+  /// extended without a migration.
+  changes         Json?
+  /// Free-form context (request id, user-agent, etc.).
+  metadata        Json?
+  /// Best-effort client IP from the request (Cloudflare or x-forwarded-for).
+  ipAddress       String?  @map("ip_address")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  actor        User?         @relation("UserAuditEvents", fields: [actorUserId], references: [id], onDelete: SetNull)
+  organization Organization? @relation("OrgAuditEvents", fields: [organizationId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt(sort: Desc)])
+  @@index([actorUserId, createdAt(sort: Desc)])
+  @@index([eventType, createdAt(sort: Desc)])
+  @@index([resourceType, resourceId])
+  @@map("audit_event")
 }

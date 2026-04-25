@@ -3,6 +3,7 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { authedOrgRoute } from "@/lib/route-helpers";
+import { clientIp, recordAudit } from "@/lib/audit";
 import { orgRoleSchema, validateBody } from "@/lib/validators";
 
 type Params = { id: string; userId: string };
@@ -33,7 +34,7 @@ async function lockOwnerGuard(
  * demotions can't both pass the guard.
  */
 export const PATCH = authedOrgRoute<Params>(
-  async ({ req, organizationId, params }) => {
+  async ({ req, user, organizationId, params }) => {
     const { userId: targetUserId } = params;
 
     const validation = await validateBody(req, patchMemberSchema);
@@ -73,7 +74,18 @@ export const PATCH = authedOrgRoute<Params>(
 
       await tx.organizationMembership.update({
         where: { id: target.id },
-        data: { role: newRole },
+        data: { role: newRole, version: { increment: 1 } },
+      });
+
+      await recordAudit(tx, {
+        eventType: "member.role_changed",
+        actorUserId: user.id,
+        organizationId,
+        resourceType: "membership",
+        resourceId: target.id,
+        changes: { before: { role: target.role }, after: { role: newRole } },
+        metadata: { targetUserId },
+        ipAddress: clientIp(req),
       });
 
       return NextResponse.json({ ok: true });
@@ -90,7 +102,7 @@ export const PATCH = authedOrgRoute<Params>(
  * `last_owner`. Same lock-then-count-then-mutate pattern as PATCH.
  */
 export const DELETE = authedOrgRoute<Params>(
-  async ({ organizationId, params }) => {
+  async ({ req, user, organizationId, params }) => {
     const { userId: targetUserId } = params;
 
     return prisma.$transaction(async (tx) => {
@@ -118,6 +130,17 @@ export const DELETE = authedOrgRoute<Params>(
 
       await tx.organizationMembership.delete({
         where: { id: target.id },
+      });
+
+      await recordAudit(tx, {
+        eventType: "member.removed",
+        actorUserId: user.id,
+        organizationId,
+        resourceType: "membership",
+        resourceId: target.id,
+        changes: { before: { role: target.role } },
+        metadata: { targetUserId },
+        ipAddress: clientIp(req),
       });
 
       return NextResponse.json({ ok: true });

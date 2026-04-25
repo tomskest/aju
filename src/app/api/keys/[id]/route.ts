@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { authedUserRoute } from "@/lib/route-helpers";
+import { clientIp, recordAudit } from "@/lib/audit";
 
 export const runtime = "nodejs";
 
@@ -17,7 +18,7 @@ function notFound() {
  * disclosing existence.
  */
 export const DELETE = authedUserRoute<{ id: string }>(
-  async ({ user, agentId, params }) => {
+  async ({ req, user, agentId, apiKeyId, params }) => {
     if (agentId) {
       return NextResponse.json(
         { error: "agent_principals_cannot_revoke_keys" },
@@ -30,7 +31,7 @@ export const DELETE = authedUserRoute<{ id: string }>(
 
     const key = await prisma.apiKey.findFirst({
       where: { id, userId: user.id },
-      select: { id: true, revokedAt: true },
+      select: { id: true, revokedAt: true, organizationId: true, name: true },
     });
     if (!key) return notFound();
 
@@ -38,6 +39,17 @@ export const DELETE = authedUserRoute<{ id: string }>(
       await prisma.apiKey.update({
         where: { id: key.id },
         data: { revokedAt: new Date() },
+      });
+
+      await recordAudit(prisma, {
+        eventType: "key.revoked",
+        actorUserId: user.id,
+        actorApiKeyId: apiKeyId ?? null,
+        organizationId: key.organizationId ?? null,
+        resourceType: "apikey",
+        resourceId: key.id,
+        changes: { name: key.name },
+        ipAddress: clientIp(req),
       });
     }
 

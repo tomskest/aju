@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { withTenant } from "@/lib/tenant";
 import { currentAuth } from "@/lib/auth";
+import { clientIp, recordAudit } from "@/lib/audit";
 
 export const runtime = "nodejs";
 
@@ -182,60 +183,53 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
       });
       if (!callerAccess) return forbidden();
 
-      // Acquire a transaction-scoped advisory lock on the (brain, agent)
-      // pair so concurrent grant requests serialize. There is no unique
-      // index on (brain_id, agent_id) — adding one needs a tenant-DB
-      // migration (P1) — so without this lock, two concurrent calls could
-      // both observe `existing=null` and both insert, leaving duplicate
-      // grant rows. The lock releases when the surrounding transaction
-      // commits or aborts.
-      const lockKey = `brain-access-grant:${brainId}:agent:${id}`;
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
-
-      // Upsert-ish: if a grant already exists, bump its role instead of erroring.
-      const existing = await tx.brainAccess.findFirst({
-        where: { brainId, agentId: id },
+      // Idempotent upsert against the `(brain_id, agent_id)` unique
+      // (added in tenant migration 20260425100000). The DB-level
+      // constraint replaces the previous advisory-lock workaround:
+      // concurrent inserts now resolve to UPDATE instead of leaving a
+      // duplicate row. Pre-check existence so the response status can
+      // distinguish 201 (new grant) from 200 (role bump on existing).
+      const existing = await tx.brainAccess.findUnique({
+        where: { brainId_agentId: { brainId, agentId: id } },
         select: { id: true },
       });
 
-      if (existing) {
-        await tx.brainAccess.update({
-          where: { id: existing.id },
-          data: { role },
-        });
-        return NextResponse.json({
-          ok: true,
-          updated: true,
-          grant: {
-            accessId: existing.id,
-            brainId: brain.id,
-            brainName: brain.name,
-            brainType: brain.type,
-            role,
-          },
-        });
-      }
+      const grant = await tx.brainAccess.upsert({
+        where: { brainId_agentId: { brainId, agentId: id } },
+        create: { brainId, agentId: id, role },
+        update: { role },
+        select: { id: true },
+      });
 
-      const created = await tx.brainAccess.create({
-        data: {
-          brainId,
-          agentId: id,
-          role,
-        },
+      // Audit lives in the control DB and uses `prisma`, not `tx` (tenant
+      // transaction). Soft commit semantics — if audit fails, the grant
+      // still stands but a console.error is emitted. The `metadata.action`
+      // distinguishes a fresh grant from a role bump on an existing one.
+      await recordAudit(prisma, {
+        eventType: "agent.granted",
+        actorUserId: user.id,
+        organizationId,
+        agentId: id,
+        resourceType: "brain_access",
+        resourceId: grant.id,
+        changes: { after: { role, brainId, brainName: brain.name } },
+        metadata: { action: existing ? "role_updated" : "created" },
+        ipAddress: clientIp(req),
       });
 
       return NextResponse.json(
         {
           ok: true,
+          ...(existing ? { updated: true } : {}),
           grant: {
-            accessId: created.id,
+            accessId: grant.id,
             brainId: brain.id,
             brainName: brain.name,
             brainType: brain.type,
             role,
           },
         },
-        { status: 201 },
+        { status: existing ? 200 : 201 },
       );
     },
   );

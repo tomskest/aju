@@ -4,6 +4,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { sendEmail, orgInvitationEmail } from "@/lib/email";
 import { authedOrgRoute } from "@/lib/route-helpers";
+import { clientIp, recordAudit } from "@/lib/audit";
 import { emailSchema, orgRoleSchema, validateBody } from "@/lib/validators";
 
 const INVITE_TOKEN_BYTES = 36; // base64url encodes to 48 chars (ceil(36*4/3) = 48)
@@ -107,6 +108,16 @@ export const POST = authedOrgRoute<Params>(
         createdBy: user.id,
       },
       select: { id: true, email: true, role: true, expiresAt: true },
+    });
+
+    await recordAudit(prisma, {
+      eventType: "invitation.created",
+      actorUserId: user.id,
+      organizationId,
+      resourceType: "invitation",
+      resourceId: invitation.id,
+      changes: { email, role },
+      ipAddress: clientIp(req),
     });
 
     const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "https://aju.sh";

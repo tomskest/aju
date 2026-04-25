@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { prisma, tenantDbFor } from "@/lib/db";
 import { clearActiveOrganizationCookie, clearSessionCookie } from "@/lib/auth";
 import { deleteOrganizationWithStorage } from "@/lib/vault";
 import { authedUserRoute } from "@/lib/route-helpers";
@@ -75,9 +75,39 @@ const handler = authedUserRoute(async ({ user, agentId }) => {
 
   // --- 2. Remove memberships in orgs the user doesn't own -------------
   // Per the spec: if the user is just a member of someone else's org,
-  // they leave — the org keeps running. Membership rows cascade on User
-  // delete below too, but explicit deletion is clearer and keeps the
-  // semantics obvious if we ever change User cascade behavior.
+  // they leave — the org keeps running. Before deleting the membership
+  // rows themselves, clean up the per-tenant BrainAccess rows that
+  // reference this user's id as a denormalized string (no FK, since
+  // BrainAccess lives in the org's tenant DB and User in the control DB).
+  // Without this, those tenant rows orphan and surface as "ghost grants"
+  // that can never resolve back to a real user.
+  const memberOrgs = await prisma.organizationMembership.findMany({
+    where: { userId },
+    select: { organizationId: true },
+  });
+  let tenantBrainAccessCleaned = 0;
+  for (const m of memberOrgs) {
+    try {
+      const tenant = await tenantDbFor(m.organizationId);
+      const result = await tenant.brainAccess.deleteMany({
+        where: { userId, agentId: null },
+      });
+      tenantBrainAccessCleaned += result.count;
+    } catch (err) {
+      // Tenant DB unreachable / archived: log and continue. Stale rows
+      // can be reaped later by a sweeper.
+      console.error(
+        `[me-delete] BrainAccess cleanup in tenant ${m.organizationId} failed:`,
+        err,
+      );
+      r2Warnings.push(
+        `tenant BrainAccess cleanup failed id=${m.organizationId}`,
+      );
+    }
+  }
+
+  // Now drop the membership rows themselves. They'd cascade via User
+  // delete below too, but explicit removal makes the order obvious.
   await prisma.organizationMembership.deleteMany({ where: { userId } });
 
   // --- 3. Delete the user row ----------------------------------------
@@ -98,6 +128,7 @@ const handler = authedUserRoute(async ({ user, agentId }) => {
     brainsDeleted,
     orgsDeleted,
     r2ObjectsDeleted,
+    tenantBrainAccessCleaned,
     r2Warnings,
   };
 });

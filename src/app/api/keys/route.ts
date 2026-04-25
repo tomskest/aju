@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { generateApiKey, generateToken } from "@/lib/auth";
 import { enforceApiKeysLimit } from "@/lib/billing";
 import { authedUserRoute } from "@/lib/route-helpers";
+import { clientIp, recordAudit } from "@/lib/audit";
 import {
   apiKeyScopeSchema,
   cuidSchema,
@@ -148,7 +149,7 @@ async function resolveKeyOrg(
  * active org, or their personal org.
  */
 export const POST = authedUserRoute(
-  async ({ req, user, organizationId, agentId }) => {
+  async ({ req, user, organizationId, agentId, apiKeyId }) => {
     if (agentId) {
       return NextResponse.json(
         { error: "agent_principals_cannot_mint_keys" },
@@ -209,6 +210,21 @@ export const POST = authedUserRoute(
         organizationId: true,
         organization: { select: { id: true, name: true, slug: true } },
       },
+    });
+
+    await recordAudit(prisma, {
+      eventType: "key.minted",
+      actorUserId: user.id,
+      actorApiKeyId: apiKeyId ?? null,
+      organizationId: orgResult.organizationId,
+      resourceType: "apikey",
+      resourceId: created.id,
+      changes: {
+        name,
+        scopes,
+        expiresAt: expiresAt?.toISOString() ?? null,
+      },
+      ipAddress: clientIp(req),
     });
 
     return NextResponse.json(
