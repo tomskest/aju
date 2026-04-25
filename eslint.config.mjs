@@ -16,7 +16,7 @@ const eslintConfig = [
       ".next/**",
       "prisma/**/migrations/**",
       "workers/**",
-      "apps/cli/**",
+      "client/cli/**",
       "**/*.d.ts",
       "dist/**",
       "build/**",

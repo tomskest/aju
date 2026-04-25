@@ -185,7 +185,7 @@ const MCP_STEPS: Step[] = [
         <p className="mt-2 text-[13px] leading-6 text-[var(--color-muted)]">
           Full per-client config snippets live in the{" "}
           <Link
-            href="/docs/mcp"
+            href="/doc/mcp"
             className="text-[var(--color-ink)] underline-offset-4 hover:underline"
           >
             MCP docs

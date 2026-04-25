@@ -12,18 +12,33 @@ Memory infrastructure for AI agents. CLI-first, open source (Apache 2.0), hosted
 
 ## Repository structure
 
+Top-level dirs use **singular names** (the only exception is `scripts/`, which is
+a flat collection of dev one-offs).
+
 ```
-src/
-  app/                    Next.js App Router — pages, API routes, OAuth endpoints
-  components/             React components (PascalCase files)
-  lib/                    Domain-grouped server libraries (see below)
-  middleware.ts           Edge middleware: rate limiting, OAuth debug logging
-mcp/aju-server.ts         MCP stdio server (secondary to CLI)
-apps/cli                  Go CLI for `aju` command
-sdks/{typescript,python,go}  Auto-generated client SDKs from OpenAPI
-prisma/control            Control-plane schema (identity, orgs, OAuth, ApiKey)
-prisma/tenant             Per-tenant schema (Brain, Documents, Files, etc.)
-scripts/                  Dev/ops utilities
+src/                       Next.js app source
+  app/                     Next.js App Router — pages, /api routes, /oauth endpoints
+  components/              React components (PascalCase files)
+  lib/                     Domain-grouped server libraries (see below)
+  middleware.ts            Edge middleware: rate limiting, OAuth debug logging
+client/                    Outbound clients (everything that talks TO the API)
+  cli/                     Go CLI for the `aju` command
+  mcp/aju-server.ts        MCP stdio server (Claude Desktop / Cursor)
+  openapi/                 OpenAPI-generated SDKs
+    openapi.yaml           Source of truth — edit this; SDKs regenerate from it
+    ts/                    TypeScript SDK (npm: @tomskest/aju-sdk)
+    py/                    Python SDK (PyPI: aju)
+    go/                    Go SDK (github.com/tomskest/aju/client/openapi/go)
+    sh/generate.sh         Regenerate all three SDKs from the spec
+data/                      Database (Prisma) — was named `prisma/`
+  control/                 Control-plane schema + migrations (identity, orgs, OAuth, ApiKey)
+  tenant/                  Per-tenant schema + migrations (Brain, Documents, Files, RLS)
+kb/                        Public knowledgebase markdown — rendered at aju.sh/kb
+doc/                       Internal runbooks (deploy, neon migration, prisma upgrades)
+worker/install/            Cloudflare Worker that serves the install.sh script
+benchmark/longmemeval/     LongMemEval benchmark harness
+public/                    Next.js static assets (served at /)
+scripts/                   Dev/ops one-off scripts (kebab-case `.ts` files)
 ```
 
 ### `src/lib/` — domain folders
@@ -101,10 +116,10 @@ cross-cutting (used by ≥3 domains). Otherwise, propose a new domain folder.
 | Prisma model fields           | camelCase                           | `wordCount`, `brainId`           |
 | DB columns                    | snake_case (via `@map`)             | `word_count`, `brain_id`         |
 | zod schemas                   | camelCase + `Schema` suffix         | `createBrainSchema`              |
-| `apps/cli/cmd/*.go`           | snake_case files, PascalCase funcs  | `agent_keys.go` → `AgentsKeys()` |
-| `apps/cli/internal/<pkg>/*.go`| package dir lowercase; primary file matches package | `httpx/client.go`  |
+| `client/cli/cmd/*.go`           | snake_case files, PascalCase funcs  | `agent_keys.go` → `AgentsKeys()` |
+| `client/cli/internal/<pkg>/*.go`| package dir lowercase; primary file matches package | `httpx/client.go`  |
 | `scripts/*.ts`                | kebab-case                          | `provision-existing-orgs.ts`     |
-| `sdks/{ts,py,go}`              | language-native conventions (auto-generated from openapi) | `ajuclient` (go), `aju` (py module), `@tomskest/aju-sdk` (npm) |
+| `client/openapi/{ts,py,go}`              | language-native conventions (auto-generated from openapi) | `ajuclient` (go), `aju` (py module), `@tomskest/aju-sdk` (npm) |
 | Examples in CLI help / docs   | use `Acme` (org/brain) as the placeholder; never reference real customers or internal teams | `aju brains create Acme --type org` |
 
 ### API routes — use the helpers, not raw boilerplate
@@ -179,7 +194,7 @@ this is deliberate, not legacy mess:
 | `/api/auth/device/{start,approve,poll}`      | Device-grant flow (used by the Go CLI)        |
 | `/api/auth/{me,signout}`                     | Session-only (cookie) endpoints               |
 
-The Go CLI in `apps/cli/cmd/{auth,agent_provision}.go` pins
+The Go CLI in `client/cli/cmd/{auth,agent_provision}.go` pins
 `/api/auth/device/*`. Do not move those paths without coordinating a CLI
 release.
 

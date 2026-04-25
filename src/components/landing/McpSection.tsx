@@ -11,7 +11,7 @@ import { Eyebrow, H2, Section } from "./LandingPrimitives";
  *      integrations are the canonical example), static-bearer config on
  *      the rest (Claude Desktop, Cursor, OpenCode).
  *
- * Configs mirror the shapes documented at /docs/mcp verbatim.
+ * Configs mirror the shapes documented at /doc/mcp verbatim.
  */
 
 const MCP_URL = "https://mcp.aju.sh/mcp";
@@ -198,10 +198,10 @@ export default function McpSection() {
             <p className="mt-4 font-mono text-[11.5px] text-[var(--color-faint)]">
               same surface as the CLI. full parameter docs at{" "}
               <Link
-                href="/docs/mcp"
+                href="/doc/mcp"
                 className="text-[var(--color-accent)] underline-offset-4 hover:underline"
               >
-                /docs/mcp
+                /doc/mcp
               </Link>
               .
             </p>

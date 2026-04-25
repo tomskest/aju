@@ -1,13 +1,25 @@
 import { NextResponse } from "next/server";
 import type { Prisma } from "@prisma/client";
+import { z } from "zod";
 import { prisma, tenantDbFor } from "@/lib/db";
 import { deleteOrganizationWithStorage } from "@/lib/vault";
 import { canManageOrg, canManageMembers, slugify } from "@/lib/tenant";
 import { authedOrgRoute } from "@/lib/route-helpers";
+import { nameSchema, validateBody } from "@/lib/validators";
 
 export const runtime = "nodejs";
 
 const SLUG_RETRY_LIMIT = 3;
+
+const patchOrgSchema = z
+  .object({
+    name: nameSchema.optional(),
+    autoAcceptDomainRequests: z.boolean().optional(),
+  })
+  .refine(
+    (v) => v.name !== undefined || v.autoAcceptDomainRequests !== undefined,
+    { message: "no_changes_supplied" },
+  );
 
 /** 6-char base36 random suffix for slug uniqueness — mirrors verify/route.ts. */
 function shortId(): string {
@@ -77,11 +89,6 @@ export const GET = authedOrgRoute<{ id: string }>(
   { orgIdParam: "id" },
 );
 
-type PatchPayload = {
-  name?: string;
-  autoAcceptDomainRequests?: boolean;
-};
-
 /**
  * PATCH /api/orgs/[id]
  *
@@ -92,17 +99,12 @@ type PatchPayload = {
  */
 export const PATCH = authedOrgRoute<{ id: string }>(
   async ({ req, organizationId, role }) => {
-    const body = (await req.json().catch(() => ({}))) as PatchPayload;
+    const validation = await validateBody(req, patchOrgSchema);
+    if (!validation.ok) return validation.response;
+    const { name: newName, autoAcceptDomainRequests } = validation.value;
 
-    const wantsRename = typeof body.name === "string" && body.name.trim() !== "";
-    const wantsFlagChange = typeof body.autoAcceptDomainRequests === "boolean";
-
-    if (!wantsRename && !wantsFlagChange) {
-      return NextResponse.json(
-        { error: "no changes supplied" },
-        { status: 400 },
-      );
-    }
+    const wantsRename = newName !== undefined;
+    const wantsFlagChange = autoAcceptDomainRequests !== undefined;
 
     // Rename is owner-only; flag change is owner+admin (already gated by minRole).
     if (wantsRename && !canManageOrg(role)) {
@@ -114,15 +116,9 @@ export const PATCH = authedOrgRoute<{ id: string }>(
 
     const updates: Prisma.OrganizationUpdateInput = {};
     if (wantsFlagChange) {
-      updates.autoAcceptDomainRequests = body.autoAcceptDomainRequests;
+      updates.autoAcceptDomainRequests = autoAcceptDomainRequests;
     }
-
-    let newName: string | null = null;
     if (wantsRename) {
-      newName = (body.name as string).trim();
-      if (newName.length > 120) {
-        return NextResponse.json({ error: "name too long" }, { status: 400 });
-      }
       updates.name = newName;
     }
 

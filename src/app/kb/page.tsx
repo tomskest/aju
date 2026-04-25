@@ -49,7 +49,7 @@ export default async function KbWelcomePage() {
             <span aria-hidden>-&gt;</span>
           </a>
           <Link
-            href="/docs/self-host"
+            href="/doc/self-host"
             className="inline-flex items-center gap-2 px-2 py-2.5 font-mono text-[12px] uppercase tracking-[0.2em] text-[var(--color-muted)] transition hover:text-[var(--color-ink)]"
           >
             self-host guide

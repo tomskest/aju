@@ -55,8 +55,8 @@ resp = search_vault.sync(
   {
     id: "go",
     label: "Go",
-    install: "go get github.com/tomskest/aju/sdks/go/ajuclient",
-    snippet: `import "github.com/tomskest/aju/sdks/go/ajuclient"
+    install: "go get github.com/tomskest/aju/client/openapi/go/ajuclient",
+    snippet: `import "github.com/tomskest/aju/client/openapi/go/ajuclient"
 
 c, _ := ajuclient.New("aju_live_...")
 limit := 10
@@ -118,7 +118,7 @@ export default function SdksSection() {
             <div className="mt-3 flex items-center gap-3 rounded-md border border-white/10 bg-[rgba(5,6,8,0.6)] px-3.5 py-2.5 font-mono text-[13px]">
               <span className="text-[var(--color-accent)]">→</span>
               <span className="flex-1 truncate text-[var(--color-ink)]">
-                sdks/openapi/openapi.yaml
+                client/openapi/openapi.yaml
               </span>
             </div>
             <p className="mt-3 font-mono text-[11.5px] leading-[1.7] text-[var(--color-muted)]">
@@ -149,7 +149,7 @@ export default function SdksSection() {
                 <span className="text-[var(--color-faint)]">03 </span>
                 run{" "}
                 <span className="text-[var(--color-ink)]">
-                  ./sdks/scripts/generate.sh
+                  ./client/openapi/sh/generate.sh
                 </span>
               </li>
               <li>
@@ -176,10 +176,10 @@ export default function SdksSection() {
             <p className="mt-4 font-mono text-[11.5px] text-[var(--color-faint)]">
               full API reference at{" "}
               <Link
-                href="/docs/sdks"
+                href="/doc/sdks"
                 className="text-[var(--color-accent)] underline-offset-4 hover:underline"
               >
-                /docs/sdks
+                /doc/sdks
               </Link>
               .
             </p>

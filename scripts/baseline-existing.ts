@@ -89,7 +89,7 @@ async function main() {
   } else {
     resolveBaseline(
       controlDsn,
-      "prisma/control/schema.prisma",
+      "data/control/schema.prisma",
       CONTROL_BASELINE,
     );
     console.log(`control baselined as applied: ${CONTROL_BASELINE}`);
@@ -114,7 +114,7 @@ async function main() {
       skipped++;
       continue;
     }
-    resolveBaseline(dsn, "prisma/tenant/schema.prisma", TENANT_BASELINE);
+    resolveBaseline(dsn, "data/tenant/schema.prisma", TENANT_BASELINE);
     console.log(`${t.databaseName}: baselined as applied`);
     baselined++;
   }

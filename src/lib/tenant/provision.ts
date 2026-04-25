@@ -50,10 +50,10 @@ const log = baseLogger.child({ area: "tenant-provision" });
 export { CURRENT_TENANT_SCHEMA_VERSION };
 
 const TENANT_SETUP_FILES = [
-  "prisma/tenant/vector-setup.sql",
-  "prisma/tenant/fts-setup/migration.sql",
-  "prisma/tenant/fts-setup/files-fts.sql",
-  "prisma/tenant/rls-policies.sql",
+  "data/tenant/vector-setup.sql",
+  "data/tenant/fts-setup/migration.sql",
+  "data/tenant/fts-setup/files-fts.sql",
+  "data/tenant/rls-policies.sql",
 ];
 
 function dbNameFor(orgId: string): string {
@@ -269,10 +269,10 @@ function isNotFound(err: unknown): boolean {
 
 async function applyTenantSchema(directDsn: string): Promise<void> {
   // Fresh tenant DB — run `prisma migrate deploy`, which will apply every
-  // migration in prisma/tenant/migrations/ from the init baseline forward.
+  // migration in data/tenant/migrations/ from the init baseline forward.
   // Existing tenants provisioned before migrations were introduced must be
   // baselined once via `prisma migrate resolve --applied 20260422000000_init`
-  // before this script runs against them (see docs/prisma-migrations.md).
+  // before this script runs against them (see doc/prisma-migrations.md).
   const res = spawnSync(
     "npx",
     [
@@ -280,7 +280,7 @@ async function applyTenantSchema(directDsn: string): Promise<void> {
       "migrate",
       "deploy",
       "--schema",
-      "prisma/tenant/schema.prisma",
+      "data/tenant/schema.prisma",
     ],
     {
       env: { ...process.env, TENANT_DATABASE_URL: directDsn },

@@ -304,7 +304,7 @@ export default async function UsagePage() {
           The beta legacy plan locks in a generous set of caps for the first
           100 verified signups. Read the{" "}
           <Link
-            href="/docs/beta-plan"
+            href="/doc/beta-plan"
             className="font-mono text-[var(--color-accent)] underline-offset-4 hover:underline"
           >
             beta plan details

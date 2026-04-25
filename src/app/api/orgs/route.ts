@@ -1,13 +1,16 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import type { Prisma } from "@prisma/client";
+import { z } from "zod";
 import { prisma, tenantDbFor } from "@/lib/db";
-import { provisionTenant } from "@/lib/tenant";
-import { currentAuth } from "@/lib/auth";
-import { slugify } from "@/lib/tenant";
+import { provisionTenant, slugify } from "@/lib/tenant";
+import { authedUserRoute } from "@/lib/route-helpers";
+import { nameSchema, validateBody } from "@/lib/validators";
 
 export const runtime = "nodejs";
 
 const SLUG_RETRY_LIMIT = 3;
+
+const createOrgSchema = z.object({ name: nameSchema });
 
 /** 6-char base36 random suffix for slug uniqueness — mirrors verify/route.ts. */
 function shortId(): string {
@@ -18,10 +21,6 @@ function shortId(): string {
   return s.slice(0, 6);
 }
 
-function unauthorized() {
-  return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-}
-
 /**
  * GET /api/orgs
  *
@@ -29,16 +28,13 @@ function unauthorized() {
  * counts and the caller's role. Also returns the `activeOrganizationId` so a
  * single round-trip can rehydrate the org switcher.
  */
-export async function GET(req: NextRequest) {
-  const auth = await currentAuth(req);
-  if (!auth) return unauthorized();
-  if (auth.agentId) {
+export const GET = authedUserRoute(async ({ user, organizationId, agentId }) => {
+  if (agentId) {
     return NextResponse.json(
       { error: "agent_principals_cannot_manage_orgs" },
       { status: 403 },
     );
   }
-  const { user } = auth;
 
   const memberships = await prisma.organizationMembership.findMany({
     where: { userId: user.id },
@@ -49,11 +45,7 @@ export async function GET(req: NextRequest) {
           name: true,
           slug: true,
           isPersonal: true,
-          _count: {
-            select: {
-              memberships: true,
-            },
-          },
+          _count: { select: { memberships: true } },
         },
       },
     },
@@ -78,24 +70,19 @@ export async function GET(req: NextRequest) {
     }),
   );
 
-  const orgs = memberships.map((m, i) => ({
-    id: m.organization.id,
-    name: m.organization.name,
-    slug: m.organization.slug,
-    isPersonal: m.organization.isPersonal,
-    role: m.role,
-    memberCount: m.organization._count.memberships,
-    brainCount: brainCounts[i],
-  }));
-
-  const activeOrganizationId = auth.organizationId;
-
-  return NextResponse.json({ orgs, activeOrganizationId });
-}
-
-type CreateOrgPayload = {
-  name?: string;
-};
+  return {
+    orgs: memberships.map((m, i) => ({
+      id: m.organization.id,
+      name: m.organization.name,
+      slug: m.organization.slug,
+      isPersonal: m.organization.isPersonal,
+      role: m.role,
+      memberCount: m.organization._count.memberships,
+      brainCount: brainCounts[i],
+    })),
+    activeOrganizationId: organizationId,
+  };
+});
 
 /**
  * POST /api/orgs
@@ -103,27 +90,19 @@ type CreateOrgPayload = {
  * Create a new team org and make the caller the owner. Slug is derived from
  * the name plus a 6-char suffix, with a small retry loop on collision.
  */
-export async function POST(req: NextRequest) {
-  const auth = await currentAuth(req);
-  if (!auth) return unauthorized();
-  if (auth.agentId) {
+export const POST = authedUserRoute(async ({ req, user, agentId }) => {
+  if (agentId) {
     return NextResponse.json(
       { error: "agent_principals_cannot_manage_orgs" },
       { status: 403 },
     );
   }
-  const { user } = auth;
 
-  const body = (await req.json().catch(() => ({}))) as CreateOrgPayload;
-  const rawName = typeof body.name === "string" ? body.name.trim() : "";
-  if (!rawName) {
-    return NextResponse.json({ error: "name required" }, { status: 400 });
-  }
-  if (rawName.length > 120) {
-    return NextResponse.json({ error: "name too long" }, { status: 400 });
-  }
+  const validation = await validateBody(req, createOrgSchema);
+  if (!validation.ok) return validation.response;
+  const { name } = validation.value;
 
-  const baseSlug = slugify(rawName) || "org";
+  const baseSlug = slugify(name) || "org";
 
   let org: { id: string; name: string; slug: string } | null = null;
   let lastErr: unknown = null;
@@ -133,7 +112,7 @@ export async function POST(req: NextRequest) {
       org = await prisma.$transaction(async (tx) => {
         const created = await tx.organization.create({
           data: {
-            name: rawName,
+            name,
             slug: candidate,
             isPersonal: false,
             ownerUserId: user.id,
@@ -168,8 +147,8 @@ export async function POST(req: NextRequest) {
   }
 
   // Provision the per-tenant DB immediately after the control-plane org +
-  // membership commit. `provisionTenant` opens its own connections (Neon
-  // API + direct DSN) so it must run OUTSIDE the prisma.$transaction above.
+  // membership commit. `provisionTenant` opens its own connections (Neon API
+  // + direct DSN) so it must run OUTSIDE the prisma.$transaction above.
   // Bubble the error on failure — a half-provisioned org is worse than a
   // retryable 500, and the caller can retry on the same org id because
   // provisionTenant is idempotent.
@@ -186,4 +165,4 @@ export async function POST(req: NextRequest) {
     },
     { status: 201 },
   );
-}
+});

@@ -26,21 +26,21 @@ const TILES: Tile[] = [
     title: "Install the CLI",
     description:
       "One-line install gets you `aju login`, `aju recall`, and the full MCP surface on your machine.",
-    href: "/docs/getting-started",
+    href: "/doc/getting-started",
     cta: "read the guide →",
   },
   {
     title: "Connect an MCP client",
     description:
       "Point Claude Desktop, Claude.ai, Cursor, OpenCode, or any MCP host at the aju remote endpoint with a bearer token.",
-    href: "/docs/mcp",
+    href: "/doc/mcp",
     cta: "wire it up →",
   },
   {
     title: "Connect Claude Code",
     description:
       "Drop the aju skill into your Claude Code setup to let agents write and read memory automatically.",
-    href: "/docs/claude-code",
+    href: "/doc/claude-code",
     cta: "set it up →",
   },
   {

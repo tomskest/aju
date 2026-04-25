@@ -1,10 +1,10 @@
 /**
  * Apply tenant schema migrations to every active tenant database.
  *
- * Runs in CI after every deploy that touches prisma/tenant/. For each
+ * Runs in CI after every deploy that touches data/tenant/. For each
  * active tenant:
  *   1. Acquire advisory lock on hashtext('tenant-migrate:' || db_name).
- *   2. Shell out to `prisma migrate deploy --schema prisma/tenant/schema.prisma`
+ *   2. Shell out to `prisma migrate deploy --schema data/tenant/schema.prisma`
  *      with TENANT_DATABASE_URL=<direct DSN>. This is a no-op if the tenant
  *      DB is already up to date.
  *   3. Re-apply vector-setup.sql, fts-setup/*.sql, rls-policies.sql
@@ -19,7 +19,7 @@
  * One-time baselining for existing production tenants: before shipping code
  * that uses `migrate deploy`, the operator must run once per tenant DB:
  *   DATABASE_URL=<tenant direct DSN> \
- *     npx prisma migrate resolve --schema prisma/tenant/schema.prisma \
+ *     npx prisma migrate resolve --schema data/tenant/schema.prisma \
  *     --applied 20260422000000_init
  * so Prisma's _prisma_migrations table records the baseline as applied.
  *
@@ -38,10 +38,10 @@ import { decryptDsn } from "../src/lib/tenant";
 import { CURRENT_TENANT_SCHEMA_VERSION } from "../src/lib/tenant";
 
 const TENANT_SETUP_FILES = [
-  "prisma/tenant/vector-setup.sql",
-  "prisma/tenant/fts-setup/migration.sql",
-  "prisma/tenant/fts-setup/files-fts.sql",
-  "prisma/tenant/rls-policies.sql",
+  "data/tenant/vector-setup.sql",
+  "data/tenant/fts-setup/migration.sql",
+  "data/tenant/fts-setup/files-fts.sql",
+  "data/tenant/rls-policies.sql",
 ];
 
 async function main(): Promise<void> {
@@ -126,7 +126,7 @@ async function runPrismaDeploy(dsn: string): Promise<void> {
       "migrate",
       "deploy",
       "--schema",
-      "prisma/tenant/schema.prisma",
+      "data/tenant/schema.prisma",
     ],
     {
       env: { ...process.env, TENANT_DATABASE_URL: dsn },

@@ -1,44 +1,34 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { generateApiKey, generateToken } from "@/lib/auth";
 import { enforceApiKeysLimit } from "@/lib/billing";
 import { authedUserRoute } from "@/lib/route-helpers";
+import {
+  apiKeyScopeSchema,
+  cuidSchema,
+  nameSchema,
+  validateBody,
+} from "@/lib/validators";
 
 export const runtime = "nodejs";
 
-const ALLOWED_SCOPES = ["read", "write", "admin"] as const;
-type Scope = (typeof ALLOWED_SCOPES)[number];
+type Scope = z.infer<typeof apiKeyScopeSchema>;
 
 const DEFAULT_SCOPES: Scope[] = ["read", "write"];
-const MAX_NAME_LENGTH = 120;
 const MAX_EXPIRES_DAYS = 365 * 10; // ten years — effectively no-expiry with a ceiling
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
-/**
- * Normalize an unknown `scopes` value coming from the request body. Unknown
- * scopes are rejected outright — we don't want to persist typos that might
- * silently upgrade later if we add more granular scopes.
- */
-function parseScopes(
-  raw: unknown,
-): { ok: true; scopes: Scope[] } | { ok: false; error: string } {
-  if (raw == null) return { ok: true, scopes: DEFAULT_SCOPES };
-  if (!Array.isArray(raw)) return { ok: false, error: "scopes must be an array" };
-
-  const out: Scope[] = [];
-  for (const entry of raw) {
-    if (typeof entry !== "string") {
-      return { ok: false, error: "scopes must be strings" };
-    }
-    const lower = entry.trim().toLowerCase();
-    if (!ALLOWED_SCOPES.includes(lower as Scope)) {
-      return { ok: false, error: `unknown scope: ${entry}` };
-    }
-    if (!out.includes(lower as Scope)) out.push(lower as Scope);
-  }
-  if (out.length === 0) return { ok: true, scopes: DEFAULT_SCOPES };
-  return { ok: true, scopes: out };
-}
+const createKeySchema = z.object({
+  name: nameSchema,
+  scopes: z
+    .array(apiKeyScopeSchema)
+    .optional()
+    // Drop duplicates while keeping insertion order. Empty after dedup → defaults.
+    .transform((s) => (s ? [...new Set(s)] : undefined)),
+  expiresInDays: z.number().int().positive().max(MAX_EXPIRES_DAYS).optional(),
+  organizationId: cuidSchema.optional(),
+});
 
 /**
  * The stored `scopes` column is `Json` — Prisma returns it as `unknown`. This
@@ -99,13 +89,6 @@ export const GET = authedUserRoute(async ({ user }) => {
   };
 });
 
-type CreatePayload = {
-  name?: string;
-  scopes?: unknown;
-  expiresInDays?: unknown;
-  organizationId?: unknown;
-};
-
 /**
  * Resolve which organization a newly-minted key should pin to.
  *
@@ -120,16 +103,15 @@ type CreatePayload = {
  */
 async function resolveKeyOrg(
   userId: string,
-  requested: unknown,
+  requested: string | undefined,
   activeOrgId: string | null,
 ): Promise<
   | { ok: true; organizationId: string }
   | { ok: false; status: number; error: string }
 > {
-  if (typeof requested === "string" && requested.trim() !== "") {
-    const wanted = requested.trim();
+  if (requested) {
     const membership = await prisma.organizationMembership.findFirst({
-      where: { userId, organizationId: wanted },
+      where: { userId, organizationId: requested },
       select: { organizationId: true },
     });
     if (!membership) {
@@ -180,43 +162,21 @@ export const POST = authedUserRoute(
     const limitErr = await enforceApiKeysLimit(user.id);
     if (limitErr) return limitErr;
 
-    const body = (await req.json().catch(() => ({}))) as CreatePayload;
+    const validation = await validateBody(req, createKeySchema);
+    if (!validation.ok) return validation.response;
+    const { name, scopes: requestedScopes, expiresInDays, organizationId: requestedOrgId } =
+      validation.value;
 
-    const rawName = typeof body.name === "string" ? body.name.trim() : "";
-    if (!rawName) {
-      return NextResponse.json({ error: "name required" }, { status: 400 });
-    }
-    if (rawName.length > MAX_NAME_LENGTH) {
-      return NextResponse.json({ error: "name too long" }, { status: 400 });
-    }
+    const scopes =
+      requestedScopes && requestedScopes.length > 0 ? requestedScopes : DEFAULT_SCOPES;
 
-    const scopeResult = parseScopes(body.scopes);
-    if (!scopeResult.ok) {
-      return NextResponse.json({ error: scopeResult.error }, { status: 400 });
-    }
-    const scopes = scopeResult.scopes;
-
-    let expiresAt: Date | null = null;
-    if (body.expiresInDays != null) {
-      const days = Number(body.expiresInDays);
-      if (!Number.isFinite(days) || !Number.isInteger(days) || days <= 0) {
-        return NextResponse.json(
-          { error: "expiresInDays must be a positive integer" },
-          { status: 400 },
-        );
-      }
-      if (days > MAX_EXPIRES_DAYS) {
-        return NextResponse.json(
-          { error: "expiresInDays too large" },
-          { status: 400 },
-        );
-      }
-      expiresAt = new Date(Date.now() + days * MS_PER_DAY);
-    }
+    const expiresAt = expiresInDays
+      ? new Date(Date.now() + expiresInDays * MS_PER_DAY)
+      : null;
 
     const orgResult = await resolveKeyOrg(
       user.id,
-      body.organizationId,
+      requestedOrgId,
       organizationId,
     );
     if (!orgResult.ok) {
@@ -233,7 +193,7 @@ export const POST = authedUserRoute(
         id: generateToken(16),
         prefix,
         hash,
-        name: rawName,
+        name,
         userId: user.id,
         scopes,
         expiresAt,

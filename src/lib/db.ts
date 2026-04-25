@@ -27,7 +27,7 @@ const log = baseLogger.child({ area: "tenant-db" });
 
 /**
  * Schema version the deployed code expects every tenant DB to be on. Bumped
- * by human edit when prisma/tenant/schema.prisma changes; `scripts/tenant-
+ * by human edit when data/tenant/schema.prisma changes; `scripts/tenant-
  * migrate.ts` updates each tenant's `tenant.schema_version` after a
  * successful migrate. A tenant whose recorded version is behind this value
  * is considered drifted and `tenantDbFor` throws `TenantSchemaDriftError`

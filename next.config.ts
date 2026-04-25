@@ -27,6 +27,15 @@ const nextConfig: NextConfig = {
       },
     ];
   },
+  async redirects() {
+    return [
+      // The docs route was renamed `src/app/docs` → `src/app/doc` to align
+      // with the singular-naming convention. Anyone with a bookmark to
+      // `/docs/...` keeps working.
+      { source: "/docs/:path*", destination: "/doc/:path*", permanent: true },
+      { source: "/docs", destination: "/doc", permanent: true },
+    ];
+  },
 };
 
 export default nextConfig;

@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import matter from "gray-matter";
 
-export const KB_CONTENT_ROOT = path.join(process.cwd(), "content", "kb");
+export const KB_CONTENT_ROOT = path.join(process.cwd(), "kb");
 export const KB_GITHUB_URL = "https://github.com/tomskest/aju";
 
 export type KbArticleMeta = {
