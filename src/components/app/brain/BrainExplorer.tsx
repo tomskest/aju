@@ -193,7 +193,7 @@ export default function BrainExplorer({
   };
 
   return (
-    <div className="-mx-5 -my-8 flex h-[calc(100vh-56px)] border-t border-white/5 md:-mx-10 md:-my-10">
+    <div className="flex h-[calc(100vh-56px)]">
       {/* Sidebar */}
       <aside className="hidden w-[260px] shrink-0 flex-col overflow-hidden border-r border-white/5 bg-[var(--color-bg)] md:flex">
         <div className="border-b border-white/5 px-5 py-5">

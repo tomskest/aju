@@ -11,7 +11,7 @@ type NavItem = {
 };
 
 const ITEMS: NavItem[] = [
-  { label: "Home", href: "/app" },
+  { label: "Overview", href: "/app/console" },
   { label: "Onboarding", href: "/app/onboarding" },
   { label: "Brains", href: "/app/brains" },
   { label: "API Keys", href: "/app/keys" },
@@ -23,7 +23,7 @@ export default function Sidebar() {
   const [mobileOpen, setMobileOpen] = useState(false);
 
   const isActive = (href: string) => {
-    if (href === "/app") return pathname === "/app";
+    if (href === "/app/console") return pathname === "/app/console";
     return pathname === href || pathname?.startsWith(`${href}/`);
   };
 
