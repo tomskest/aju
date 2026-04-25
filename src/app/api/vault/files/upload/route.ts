@@ -138,8 +138,11 @@ const handler = authedTenantRoute(
   },
 );
 
-export async function POST(req: NextRequest) {
+export async function POST(
+  req: NextRequest,
+  ctx: { params: Promise<Record<string, never>> },
+) {
   const tooLarge = checkContentLength(req);
   if (tooLarge) return tooLarge;
-  return handler(req);
+  return handler(req, ctx);
 }

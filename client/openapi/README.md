@@ -4,12 +4,12 @@ Official client SDKs for the aju HTTP API, all generated from a single OpenAPI
 spec so every language stays in lockstep.
 
 ```
-sdks/
-├── openapi/openapi.yaml        # source of truth — edit this
-├── typescript/                 # @aju/sdk (npm)
-├── python/                     # aju (PyPI)
+client/openapi/
+├── openapi.yaml                # source of truth — edit this
+├── ts/                         # @tomskest/aju-sdk (npm)
+├── py/                         # aju (PyPI)
 ├── go/                         # github.com/tomskest/aju/client/openapi/go
-└── scripts/generate.sh         # regenerate all three from the spec
+└── sh/generate.sh              # regenerate all three from the spec
 ```
 
 ## Workflow

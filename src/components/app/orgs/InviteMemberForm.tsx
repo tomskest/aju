@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { ORG_ROLES, type OrgRole } from "@/lib/tenant";
+import { ORG_ROLES, type OrgRole } from "@/lib/tenant/types";
 
 type Props = {
   organizationId: string;

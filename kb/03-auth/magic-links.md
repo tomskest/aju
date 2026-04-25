@@ -109,7 +109,7 @@ On success we:
 
 - `/api/signup` checks the cap *before* sending an email, so a full cohort never sees a magic link.
 - `/api/verify` re-checks inside the transaction to close the race where two users POST to `/api/signup` while there's exactly one slot left, both get sent a link, and both try to consume it.
-- `WaitlistEntry` has a monotonically increasing `position` (BigInt autoincrement, `prisma/schema.prisma:323`) so we can invite the queue in order when the cohort opens.
+- `WaitlistEntry` has a monotonically increasing `position` (BigInt autoincrement, `data/control/schema.prisma`) so we can invite the queue in order when the cohort opens.
 
 The cohort check is specifically `grandfatheredAt IS NOT NULL`, not a plain user count — so seeded admin users or data migrations won't burn slots as long as their `grandfatheredAt` stays null.
 

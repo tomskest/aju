@@ -64,7 +64,7 @@ Every server component, every API route, every `/app/**` page that needs auth ca
 
 ### Why `token` not `id` as the lookup key
 
-`Session.token` is marked `@unique` (`prisma/schema.prisma:225`). The primary key `id` exists but the cookie carries `token` specifically so that an attacker with read access to the `Session` table's `id` column but not the `token` column can't impersonate anyone. In practice both columns live in the same row and same database, so this is a belt-and-braces choice — the real protection is that `token` has 256 bits of entropy and is not logged anywhere.
+`Session.token` is marked `@unique` (`data/control/schema.prisma`). The primary key `id` exists but the cookie carries `token` specifically so that an attacker with read access to the `Session` table's `id` column but not the `token` column can't impersonate anyone. In practice both columns live in the same row and same database, so this is a belt-and-braces choice — the real protection is that `token` has 256 bits of entropy and is not logged anywhere.
 
 ## Signing out
 

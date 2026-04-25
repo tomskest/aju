@@ -23,6 +23,10 @@ coverage/
 .eslintcache
 *.tsbuildinfo
 next-env.d.ts
+client/cli/aju
+client/cli/bin/
+client/openapi/py/_generated/
+client/openapi/py/aju.egg-info/
 
 # Logs
 *.log

@@ -126,7 +126,7 @@ export function authedTenantRoute<TParams = Record<string, never>>(
   opts: TenantHandlerOpts = {},
 ): (
   req: NextRequest,
-  routeCtx?: { params?: Promise<TParams> },
+  routeCtx: { params: Promise<TParams> },
 ) => Promise<NextResponse> {
   const minRole: OrgRole = opts.minRole ?? "member";
 
@@ -146,7 +146,7 @@ export function authedTenantRoute<TParams = Record<string, never>>(
     const role = membership.role as OrgRole;
     if (ROLE_RANK[role] < ROLE_RANK[minRole]) return forbidden();
 
-    const params = ((await routeCtx?.params) ?? {}) as TParams;
+    const params = (await routeCtx.params) as TParams;
     const principal = asAuthSuccess({ user, organizationId, role, agentId, apiKeyId });
 
     return withTenant(
@@ -206,13 +206,13 @@ export function authedUserRoute<TParams = Record<string, never>>(
   handler: (ctx: UserHandlerCtx<TParams>) => Promise<unknown>,
 ): (
   req: NextRequest,
-  routeCtx?: { params?: Promise<TParams> },
+  routeCtx: { params: Promise<TParams> },
 ) => Promise<NextResponse> {
   return async (req, routeCtx) => {
     const auth = await currentAuth(req);
     if (!auth) return unauthorized();
 
-    const params = ((await routeCtx?.params) ?? {}) as TParams;
+    const params = (await routeCtx.params) as TParams;
 
     try {
       const result = await handler({
@@ -267,7 +267,7 @@ export function authedOrgRoute<TParams = Record<string, never>>(
   opts: OrgHandlerOpts = {},
 ): (
   req: NextRequest,
-  routeCtx?: { params?: Promise<TParams> },
+  routeCtx: { params: Promise<TParams> },
 ) => Promise<NextResponse> {
   const minRole: OrgRole = opts.minRole ?? "member";
 
@@ -285,7 +285,7 @@ export function authedOrgRoute<TParams = Record<string, never>>(
     }
 
     const { user, apiKeyId } = auth;
-    const params = ((await routeCtx?.params) ?? {}) as TParams;
+    const params = (await routeCtx.params) as TParams;
 
     let organizationId: string | null = auth.organizationId;
     if (opts.orgIdParam) {

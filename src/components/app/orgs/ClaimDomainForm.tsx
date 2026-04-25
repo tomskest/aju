@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { isPublicEmailDomain } from "@/lib/billing";
+import { isPublicEmailDomain } from "@/lib/billing/public-email-blocklist";
 
 type Props = {
   organizationId: string;
