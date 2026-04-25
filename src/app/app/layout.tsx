@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { currentUser } from "@/lib/auth";
 import OrgSwitcher from "@/components/app/OrgSwitcher";
+import TopBarTabs from "@/components/app/TopBarTabs";
 
 export const dynamic = "force-dynamic";
 
@@ -40,13 +41,8 @@ export default async function AppLayout({
           <OrgSwitcher />
         </div>
 
-        <div className="flex items-center gap-4">
-          <Link
-            href="/app/console"
-            className="hidden font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--color-muted)] transition hover:text-[var(--color-ink)] sm:inline"
-          >
-            console
-          </Link>
+        <div className="flex items-center gap-5">
+          <TopBarTabs />
           <span className="hidden font-mono text-[11px] text-[var(--color-faint)] md:inline">
             {user.email}
           </span>
