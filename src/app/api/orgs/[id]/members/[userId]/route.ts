@@ -1,11 +1,9 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { currentAuth } from "@/lib/auth";
-import {
-  canManageMembers,
-  ORG_ROLES,
-  type OrgRole,
-} from "@/lib/tenant";
+import { ORG_ROLES, type OrgRole } from "@/lib/tenant";
+import { authedOrgRoute } from "@/lib/route-helpers";
+
+type Params = { id: string; userId: string };
 
 /**
  * Count current owners of an organization. Used to guard against demoting or
@@ -23,83 +21,56 @@ async function countOwners(organizationId: string): Promise<number> {
  * Change a member's role. Requires owner/admin. Rejects demoting the last
  * owner with 400 `last_owner`.
  */
-export async function PATCH(
-  req: NextRequest,
-  ctx: { params: Promise<{ id: string; userId: string }> },
-) {
-  const { id: organizationId, userId: targetUserId } = await ctx.params;
+export const PATCH = authedOrgRoute<Params>(
+  async ({ req, organizationId, params }) => {
+    const { userId: targetUserId } = params;
 
-  const auth = await currentAuth(req);
-  if (!auth) {
-    return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
-  }
-  if (auth.agentId) {
-    return NextResponse.json(
-      { error: "agent_principals_cannot_manage_orgs" },
-      { status: 403 },
-    );
-  }
-  const { user } = auth;
-
-  const callerMembership = await prisma.organizationMembership.findUnique({
-    where: {
-      organizationId_userId: { organizationId, userId: user.id },
-    },
-    select: { role: true },
-  });
-
-  if (!callerMembership) {
-    return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  }
-
-  if (!canManageMembers(callerMembership.role as OrgRole)) {
-    return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  }
-
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: "invalid_json" }, { status: 400 });
-  }
-
-  const role = (body as { role?: unknown })?.role;
-  if (typeof role !== "string" || !ORG_ROLES.includes(role as OrgRole)) {
-    return NextResponse.json({ error: "invalid_role" }, { status: 400 });
-  }
-  const newRole = role as OrgRole;
-
-  const target = await prisma.organizationMembership.findUnique({
-    where: {
-      organizationId_userId: { organizationId, userId: targetUserId },
-    },
-    select: { id: true, role: true },
-  });
-
-  if (!target) {
-    return NextResponse.json({ error: "not_found" }, { status: 404 });
-  }
-
-  // No-op: same role
-  if (target.role === newRole) {
-    return NextResponse.json({ ok: true });
-  }
-
-  // Guard: demoting the last owner is forbidden.
-  if (target.role === "owner" && newRole !== "owner") {
-    const owners = await countOwners(organizationId);
-    if (owners <= 1) {
-      return NextResponse.json({ error: "last_owner" }, { status: 400 });
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json({ error: "invalid_json" }, { status: 400 });
     }
-  }
 
-  await prisma.organizationMembership.update({
-    where: { id: target.id },
-    data: { role: newRole },
-  });
+    const role = (body as { role?: unknown })?.role;
+    if (typeof role !== "string" || !ORG_ROLES.includes(role as OrgRole)) {
+      return NextResponse.json({ error: "invalid_role" }, { status: 400 });
+    }
+    const newRole = role as OrgRole;
 
-  return NextResponse.json({ ok: true });
-}
+    const target = await prisma.organizationMembership.findUnique({
+      where: {
+        organizationId_userId: { organizationId, userId: targetUserId },
+      },
+      select: { id: true, role: true },
+    });
+
+    if (!target) {
+      return NextResponse.json({ error: "not_found" }, { status: 404 });
+    }
+
+    // No-op: same role
+    if (target.role === newRole) {
+      return { ok: true };
+    }
+
+    // Guard: demoting the last owner is forbidden.
+    if (target.role === "owner" && newRole !== "owner") {
+      const owners = await countOwners(organizationId);
+      if (owners <= 1) {
+        return NextResponse.json({ error: "last_owner" }, { status: 400 });
+      }
+    }
+
+    await prisma.organizationMembership.update({
+      where: { id: target.id },
+      data: { role: newRole },
+    });
+
+    return { ok: true };
+  },
+  { orgIdParam: "id", minRole: "admin" },
+);
 
 /**
  * DELETE /api/orgs/[id]/members/[userId]
@@ -108,61 +79,34 @@ export async function PATCH(
  * removing the last owner (including self-removal in that case) with 400
  * `last_owner`.
  */
-export async function DELETE(
-  req: NextRequest,
-  ctx: { params: Promise<{ id: string; userId: string }> },
-) {
-  const { id: organizationId, userId: targetUserId } = await ctx.params;
+export const DELETE = authedOrgRoute<Params>(
+  async ({ organizationId, params }) => {
+    const { userId: targetUserId } = params;
 
-  const auth = await currentAuth(req);
-  if (!auth) {
-    return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
-  }
-  if (auth.agentId) {
-    return NextResponse.json(
-      { error: "agent_principals_cannot_manage_orgs" },
-      { status: 403 },
-    );
-  }
-  const { user } = auth;
+    const target = await prisma.organizationMembership.findUnique({
+      where: {
+        organizationId_userId: { organizationId, userId: targetUserId },
+      },
+      select: { id: true, role: true },
+    });
 
-  const callerMembership = await prisma.organizationMembership.findUnique({
-    where: {
-      organizationId_userId: { organizationId, userId: user.id },
-    },
-    select: { role: true },
-  });
-
-  if (!callerMembership) {
-    return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  }
-
-  if (!canManageMembers(callerMembership.role as OrgRole)) {
-    return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  }
-
-  const target = await prisma.organizationMembership.findUnique({
-    where: {
-      organizationId_userId: { organizationId, userId: targetUserId },
-    },
-    select: { id: true, role: true },
-  });
-
-  if (!target) {
-    return NextResponse.json({ error: "not_found" }, { status: 404 });
-  }
-
-  // Guard: removing the last owner (including self) is forbidden.
-  if (target.role === "owner") {
-    const owners = await countOwners(organizationId);
-    if (owners <= 1) {
-      return NextResponse.json({ error: "last_owner" }, { status: 400 });
+    if (!target) {
+      return NextResponse.json({ error: "not_found" }, { status: 404 });
     }
-  }
 
-  await prisma.organizationMembership.delete({
-    where: { id: target.id },
-  });
+    // Guard: removing the last owner (including self) is forbidden.
+    if (target.role === "owner") {
+      const owners = await countOwners(organizationId);
+      if (owners <= 1) {
+        return NextResponse.json({ error: "last_owner" }, { status: 400 });
+      }
+    }
 
-  return NextResponse.json({ ok: true });
-}
+    await prisma.organizationMembership.delete({
+      where: { id: target.id },
+    });
+
+    return { ok: true };
+  },
+  { orgIdParam: "id", minRole: "admin" },
+);

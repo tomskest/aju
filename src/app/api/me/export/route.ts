@@ -1,6 +1,6 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { prisma, tenantDbFor } from "@/lib/db";
-import { currentAuth } from "@/lib/auth";
+import { authedUserRoute } from "@/lib/route-helpers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -49,13 +49,7 @@ type ExportedBrain = {
  * as the service exists. It is the mechanism that makes "your data is
  * yours" a real commitment — not a marketing line.
  */
-export async function GET(req: NextRequest) {
-  const auth = await currentAuth(req);
-  if (!auth) {
-    return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
-  }
-  const { user } = auth;
-
+export const GET = authedUserRoute(async ({ user }) => {
   // Brain/BrainAccess live in per-tenant DBs — one DB per org. Walk the
   // user's memberships, open the tenant client for each, and gather owner
   // brains from there. We intentionally export only brains the user
@@ -83,9 +77,7 @@ export async function GET(req: NextRequest) {
       include: {
         brain: {
           include: {
-            documents: {
-              orderBy: { path: "asc" },
-            },
+            documents: { orderBy: { path: "asc" } },
             files: {
               orderBy: { createdAt: "asc" },
               select: {
@@ -167,4 +159,4 @@ export async function GET(req: NextRequest) {
       "Cache-Control": "no-store",
     },
   });
-}
+});

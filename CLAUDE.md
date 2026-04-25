@@ -91,16 +91,21 @@ cross-cutting (used by ≥3 domains). Otherwise, propose a new domain folder.
 
 ### Naming
 
-| Surface              | Convention                          | Example                  |
-|----------------------|-------------------------------------|--------------------------|
-| API route segments   | kebab-case                          | `/api/vault/semantic-search` |
-| Lib file names       | kebab-case                          | `link-resolver.ts`       |
-| React components     | PascalCase (file + symbol)          | `OrgSwitcher.tsx`        |
-| TS types/interfaces  | PascalCase                          | `BrainContext`           |
-| Functions / vars     | camelCase                           | `resolveBrain`, `brainId`|
-| Prisma model fields  | camelCase                           | `wordCount`, `brainId`   |
-| DB columns           | snake_case (via `@map`)             | `word_count`, `brain_id` |
-| zod schemas          | camelCase + `Schema` suffix         | `createBrainSchema`      |
+| Surface                       | Convention                          | Example                          |
+|-------------------------------|-------------------------------------|----------------------------------|
+| API route segments            | kebab-case                          | `/api/vault/semantic-search`     |
+| `src/lib/**` file names       | kebab-case                          | `link-resolver.ts`               |
+| React components              | PascalCase (file + symbol)          | `OrgSwitcher.tsx`                |
+| TS types/interfaces           | PascalCase                          | `BrainContext`                   |
+| Functions / vars              | camelCase                           | `resolveBrain`, `brainId`        |
+| Prisma model fields           | camelCase                           | `wordCount`, `brainId`           |
+| DB columns                    | snake_case (via `@map`)             | `word_count`, `brain_id`         |
+| zod schemas                   | camelCase + `Schema` suffix         | `createBrainSchema`              |
+| `apps/cli/cmd/*.go`           | snake_case files, PascalCase funcs  | `agent_keys.go` → `AgentsKeys()` |
+| `apps/cli/internal/<pkg>/*.go`| package dir lowercase; primary file matches package | `httpx/client.go`  |
+| `scripts/*.ts`                | kebab-case                          | `provision-existing-orgs.ts`     |
+| `sdks/{ts,py,go}`              | language-native conventions (auto-generated from openapi) | `ajuclient` (go), `aju` (py module), `@tomskest/aju-sdk` (npm) |
+| Examples in CLI help / docs   | use `Acme` (org/brain) as the placeholder; never reference real customers or internal teams | `aju brains create Acme --type org` |
 
 ### API routes — use the helpers, not raw boilerplate
 
@@ -113,9 +118,13 @@ API route handlers MUST go through one of the wrappers in `@/lib/route-helpers`:
   Pass `{ minRole: "admin" }` to gate by role.
 - **`authedUserRoute(handler)`** — only requires a signed-in user. Use for
   self-service routes (own keys, own export) that don't need org/tenant context.
-- **`authedOrgRoute(handler, opts?)`** — control-plane org operations
-  (members, invitations, domains). Resolves org from `params.id` when
-  `orgIdParam: "id"` is set; otherwise uses the active org.
+- **`authedOrgRoute(handler, opts?)`** — control-plane org operations on the
+  control DB (members, invitations, domains, access requests, switch). Resolves
+  the org id from `params[opts.orgIdParam]` (typically `"id"` from
+  `/api/orgs/[id]/...`) and verifies the caller is a member with at least
+  `opts.minRole` (default `"member"`). Agent principals are rejected with 403
+  by default — org roles are human-only, agents carry per-brain access grants
+  in the tenant DB.
 
 Don't write `currentAuth(req)` + `prisma.organizationMembership.findFirst` +
 `withTenant` directly in a handler. The helpers exist precisely to keep that

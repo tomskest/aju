@@ -50,8 +50,8 @@ func Search(args []string) error {
 		Usage:   "aju search <query> [--brain <name|a,b|all>] [--limit N] [--json]",
 		Examples: []string{
 			"aju search \"NDC parity\"",
-			"aju search crewpoint --brain Personal,Crewpoint",
-			"aju search crewpoint --brain all --limit 50",
+			"aju search ndc --brain Personal,Acme",
+			"aju search ndc --brain all --limit 50",
 		},
 	})
 	if err := parseFlags(fs, args); err != nil {
@@ -244,7 +244,7 @@ func Semantic(args []string) error {
 		Long:    "Use --mode vector for pure-embedding similarity; hybrid wins on most mixed queries.",
 		Examples: []string{
 			"aju semantic \"how did we think about NDC vs GDS\"",
-			"aju semantic crewpoint --brain all --mode vector",
+			"aju semantic ndc --brain all --mode vector",
 		},
 	})
 	if err := parseFlags(fs, args); err != nil {

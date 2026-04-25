@@ -247,7 +247,7 @@ func OrgsSwitch(args []string) error {
 server cookie. If the current profile's key doesn't bind to <slug>, the
 command warns and points you at the right profile or 'aju keys update'.`,
 		Examples: []string{
-			"aju orgs switch crewpoint",
+			"aju orgs switch acme",
 		},
 	})
 	if err := parseFlags(fs, args); err != nil {
@@ -315,7 +315,7 @@ func OrgsCreate(args []string) error {
 	setLeafUsage(fs, leafHelp{
 		Summary:  "Create a new organization and auto-switch into it.",
 		Usage:    "aju orgs create <name>",
-		Examples: []string{"aju orgs create \"Crewpoint\""},
+		Examples: []string{"aju orgs create \"Acme\""},
 	})
 	if err := parseFlags(fs, args); err != nil {
 		return err

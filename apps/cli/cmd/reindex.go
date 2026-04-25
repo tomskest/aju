@@ -47,7 +47,7 @@ rows with missing indexes are touched; --refresh-all redoes everything.`,
 		Examples: []string{
 			"aju reindex",
 			"aju reindex --refresh-all",
-			"aju reindex --brain Crewpoint --no-links",
+			"aju reindex --brain Acme --no-links",
 		},
 	})
 	if err := parseFlags(fs, args); err != nil {

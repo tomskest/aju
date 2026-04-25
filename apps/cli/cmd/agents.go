@@ -326,7 +326,7 @@ func AgentsGrant(args []string) error {
 		Usage:   "aju agents grant <agent-id> <brain-name> [--role viewer|editor|owner]",
 		Examples: []string{
 			"aju agents grant agt_01HX... Personal --role editor",
-			"aju agents grant agt_01HX... Crewpoint --role viewer",
+			"aju agents grant agt_01HX... Acme --role viewer",
 		},
 	})
 	if err := parseFlags(fs, args); err != nil {

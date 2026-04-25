@@ -1,7 +1,8 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { clearActiveOrganizationCookie, clearSessionCookie, currentAuth } from "@/lib/auth";
+import { clearActiveOrganizationCookie, clearSessionCookie } from "@/lib/auth";
 import { deleteOrganizationWithStorage } from "@/lib/vault";
+import { authedUserRoute } from "@/lib/route-helpers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,21 +29,14 @@ export const dynamic = "force-dynamic";
  * than erroring. Within a single call, each step is safe to re-run; we
  * always re-read state after each phase in case of partial progress from
  * a prior attempt.
- *
- * Response: `{ brainsDeleted, r2ObjectsDeleted, orgsDeleted, r2Warnings }`.
  */
-async function handle(req: NextRequest) {
-  const auth = await currentAuth(req);
-  if (!auth) {
-    return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
-  }
-  if (auth.agentId) {
+const handler = authedUserRoute(async ({ user, agentId }) => {
+  if (agentId) {
     return NextResponse.json(
       { error: "agent_principals_cannot_delete_account" },
       { status: 403 },
     );
   }
-  const { user } = auth;
   const userId = user.id;
 
   let brainsDeleted = 0;
@@ -65,17 +59,14 @@ async function handle(req: NextRequest) {
       orgsDeleted += 1;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      // If an org delete fails we log and continue — the rest of the
-      // teardown still needs to run. We surface this as a warning.
       console.error(`[me-delete] org ${org.id} failed:`, err);
       r2Warnings.push(`org delete failed id=${org.id}: ${msg}`);
     }
   }
 
-  // The User.personalOrgId FK was cleared by the cascade above (the org
-  // is gone). Null it defensively in case the deleteOrganization path
-  // left it dangling for any reason, so the final User.delete doesn't
-  // trip an FK constraint.
+  // The User.personalOrgId FK was cleared by the cascade above. Null it
+  // defensively in case the deleteOrganization path left it dangling, so
+  // the final User.delete doesn't trip an FK constraint.
   await prisma.user
     .update({ where: { id: userId }, data: { personalOrgId: null } })
     .catch(() => {
@@ -87,12 +78,6 @@ async function handle(req: NextRequest) {
   // they leave — the org keeps running. Membership rows cascade on User
   // delete below too, but explicit deletion is clearer and keeps the
   // semantics obvious if we ever change User cascade behavior.
-  //
-  // NOTE: BrainAccess rows in those orgs' tenant DBs still reference
-  // this userId as a denormalized string. They're harmless once the
-  // membership is gone (nothing queries them for this user), and a
-  // background reaper can sweep them up later. We don't block account
-  // deletion on per-tenant BrainAccess cleanup.
   await prisma.organizationMembership.deleteMany({ where: { userId } });
 
   // --- 3. Delete the user row ----------------------------------------
@@ -108,19 +93,14 @@ async function handle(req: NextRequest) {
   await clearSessionCookie();
   await clearActiveOrganizationCookie();
 
-  return NextResponse.json({
+  return {
     ok: true,
     brainsDeleted,
     orgsDeleted,
     r2ObjectsDeleted,
     r2Warnings,
-  });
-}
+  };
+});
 
-export async function DELETE(req: NextRequest) {
-  return handle(req);
-}
-
-export async function POST(req: NextRequest) {
-  return handle(req);
-}
+export const DELETE = handler;
+export const POST = handler;

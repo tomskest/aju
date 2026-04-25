@@ -97,7 +97,7 @@ Usage:
   aju profiles use <name>
 
 Examples:
-  aju profiles use crewpoint
+  aju profiles use acme
   aju profiles use personal
 `)
 		return nil

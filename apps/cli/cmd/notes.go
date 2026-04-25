@@ -48,7 +48,7 @@ func Read(args []string) error {
 		Usage:   "aju read <path> [--brain <name>]",
 		Examples: []string{
 			"aju read journal/2026-04-22-morning.md",
-			"aju read 03-Product/okrs.md --brain Crewpoint",
+			"aju read 03-Product/okrs.md --brain Acme",
 		},
 	})
 	if err := parseFlags(fs, args); err != nil {
@@ -95,7 +95,7 @@ func Browse(args []string) error {
 		Examples: []string{
 			"aju browse",
 			"aju browse 06-Sales",
-			"aju browse 06-Sales --brain Crewpoint",
+			"aju browse 06-Sales --brain Acme",
 		},
 	})
 	if err := parseFlags(fs, args); err != nil {
@@ -160,7 +160,7 @@ func writeDoc(op string, args []string, endpoint string) error {
 		Long:    "Pipe content into stdin; running without a pipe is a user error and is rejected with a hint.",
 		Examples: []string{
 			fmt.Sprintf("echo '# Hello' | aju %s notes/hello.md", op),
-			fmt.Sprintf("cat draft.md | aju %s drafts/draft.md --brain Crewpoint", op),
+			fmt.Sprintf("cat draft.md | aju %s drafts/draft.md --brain Acme", op),
 		},
 	})
 	if err := parseFlags(fs, args); err != nil {

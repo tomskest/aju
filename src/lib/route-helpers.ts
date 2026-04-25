@@ -241,7 +241,6 @@ export type OrgHandlerCtx<TParams = Record<string, never>> = {
   user: User;
   organizationId: string;
   role: OrgRole;
-  agentId?: string;
   apiKeyId?: string;
   params: TParams;
 };
@@ -251,7 +250,7 @@ export type OrgHandlerOpts = {
   minRole?: OrgRole;
   /**
    * If set, the helper resolves `organizationId` from `params[orgIdKey]`
-   * (typically a route segment like /api/orgs/[id]/...) and verifies the
+   * (typically a route segment like `/api/orgs/[id]/...`) and verifies the
    * caller is a member of that org. Otherwise the active org is used.
    */
   orgIdParam?: string;
@@ -276,7 +275,16 @@ export function authedOrgRoute<TParams = Record<string, never>>(
     const auth = await currentAuth(req);
     if (!auth) return unauthorized();
 
-    const { user, agentId, apiKeyId } = auth;
+    // Agents don't have org roles — they carry per-brain access grants in
+    // the tenant DB. Org-management routes are human-only.
+    if (auth.agentId) {
+      return NextResponse.json(
+        { error: "agent_principals_cannot_manage_orgs" },
+        { status: 403 },
+      );
+    }
+
+    const { user, apiKeyId } = auth;
     const params = ((await routeCtx?.params) ?? {}) as TParams;
 
     let organizationId: string | null = auth.organizationId;
@@ -303,7 +311,6 @@ export function authedOrgRoute<TParams = Record<string, never>>(
         user,
         organizationId,
         role,
-        agentId,
         apiKeyId,
         params,
       });

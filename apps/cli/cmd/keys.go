@@ -146,7 +146,7 @@ server never reveals it again. Without --org the key is pinned to the
 active organization. Pinning is mandatory: unpinned keys are rejected.`,
 		Examples: []string{
 			"aju keys create laptop",
-			"aju keys create prod-ci --org crewpoint --scopes read --expires-days 365",
+			"aju keys create prod-ci --org acme --scopes read --expires-days 365",
 		},
 	})
 	if err := parseFlags(fs, args); err != nil {
@@ -426,11 +426,11 @@ func formatLastUsed(s string) string {
 //	...prints an org marked "-" in the key column...
 //	$ aju keys update
 //	1 org missing a local key:
-//	  crewpoint-134ii6 — Crewpoint
+//	  acme-134ii6 — Acme
 //
-//	Create a key for Crewpoint (crewpoint-134ii6)? [Y/n]
-//	Profile name [crewpoint-134ii6]: crewpoint
-//	✓ crewpoint-134ii6 → profile "crewpoint"
+//	Create a key for Acme (acme-134ii6)? [Y/n]
+//	Profile name [acme-134ii6]: acme
+//	✓ acme-134ii6 → profile "acme"
 //
 //	1 created, 0 skipped.
 //	Switch with `aju profiles use <name>`.

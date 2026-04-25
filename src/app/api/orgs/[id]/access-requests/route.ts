@@ -1,60 +1,40 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { currentAuth } from "@/lib/auth";
-import { canManageMembers, type OrgRole } from "@/lib/tenant";
 import { getEmailDomain } from "@/lib/billing";
-import {
-  sendEmail,
-  accessRequestReviewEmail,
-  accessRequestSubmittedEmail,
-  accessRequestApprovedEmail,
-} from "@/lib/email";
+import { sendEmail, accessRequestReviewEmail } from "@/lib/email";
+import { authedOrgRoute } from "@/lib/route-helpers";
 
 export const runtime = "nodejs";
 
 const ACCESS_REQUEST_TTL_DAYS = 7;
 
-type Params = { params: Promise<{ id: string }> };
+type Params = { id: string };
 
 /**
  * GET /api/orgs/[id]/access-requests
  * Admins (owner/admin) list pending requests for the org.
  */
-export async function GET(req: NextRequest, { params }: Params) {
-  const { id: organizationId } = await params;
-
-  const auth = await currentAuth(req);
-  if (!auth) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
-  if (auth.agentId) {
-    return NextResponse.json(
-      { error: "agent_principals_cannot_manage_orgs" },
-      { status: 403 },
-    );
-  }
-  const { user } = auth;
-
-  const membership = await prisma.organizationMembership.findUnique({
-    where: {
-      organizationId_userId: { organizationId, userId: user.id },
-    },
-  });
-  if (!membership || !canManageMembers(membership.role as OrgRole)) {
-    return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  }
-
-  const requests = await prisma.accessRequest.findMany({
-    where: { organizationId, status: "pending" },
-    orderBy: { createdAt: "asc" },
-  });
-  return NextResponse.json({ accessRequests: requests });
-}
+export const GET = authedOrgRoute<Params>(
+  async ({ organizationId }) => {
+    const requests = await prisma.accessRequest.findMany({
+      where: { organizationId, status: "pending" },
+      orderBy: { createdAt: "asc" },
+    });
+    return { accessRequests: requests };
+  },
+  { orgIdParam: "id", minRole: "admin" },
+);
 
 /**
  * POST /api/orgs/[id]/access-requests  { message? }
  *
- * Signed-in user asks to join the org. Gated on:
+ * Signed-in user asks to join the org. NOT wrapped in `authedOrgRoute`
+ * because the caller is by definition NOT a member yet — the helper would
+ * 403 them on the membership check. Auth check + agent rejection happen
+ * inline.
+ *
+ * Gated on:
  *   - not already a member
  *   - email domain matches at least one verified domain on the org
  *   - no pending request already exists for this user+org
@@ -63,8 +43,11 @@ export async function GET(req: NextRequest, { params }: Params) {
  * the membership is created immediately and the row is marked approved.
  * Otherwise admins are emailed and the row stays pending.
  */
-export async function POST(req: NextRequest, { params }: Params) {
-  const { id: organizationId } = await params;
+export async function POST(
+  req: NextRequest,
+  ctx: { params: Promise<Params> },
+) {
+  const { id: organizationId } = await ctx.params;
 
   const auth = await currentAuth(req);
   if (!auth) {
@@ -98,15 +81,10 @@ export async function POST(req: NextRequest, { params }: Params) {
   }
 
   const existingMembership = await prisma.organizationMembership.findUnique({
-    where: {
-      organizationId_userId: { organizationId, userId: user.id },
-    },
+    where: { organizationId_userId: { organizationId, userId: user.id } },
   });
   if (existingMembership) {
-    return NextResponse.json(
-      { error: "already_member" },
-      { status: 409 }
-    );
+    return NextResponse.json({ error: "already_member" }, { status: 409 });
   }
 
   const userDomain = getEmailDomain(user.email);
@@ -122,10 +100,7 @@ export async function POST(req: NextRequest, { params }: Params) {
     },
   });
   if (!matchingDomain) {
-    return NextResponse.json(
-      { error: "no_matching_domain" },
-      { status: 403 }
-    );
+    return NextResponse.json({ error: "no_matching_domain" }, { status: 403 });
   }
 
   // Unique (orgId, requestingUserId) — if a row exists and is pending we
@@ -141,13 +116,13 @@ export async function POST(req: NextRequest, { params }: Params) {
   if (existingRequest && existingRequest.status === "pending") {
     return NextResponse.json(
       { error: "request_already_pending", accessRequestId: existingRequest.id },
-      { status: 409 }
+      { status: 409 },
     );
   }
 
   const now = new Date();
   const expiresAt = new Date(
-    now.getTime() + ACCESS_REQUEST_TTL_DAYS * 24 * 60 * 60 * 1000
+    now.getTime() + ACCESS_REQUEST_TTL_DAYS * 24 * 60 * 60 * 1000,
   );
   const shouldAutoAccept = organization.autoAcceptDomainRequests === true;
 

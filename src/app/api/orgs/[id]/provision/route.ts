@@ -1,13 +1,12 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { currentAuth } from "@/lib/auth";
 import { provisionTenant } from "@/lib/tenant";
-import { canManageOrg, type OrgRole } from "@/lib/tenant";
+import { authedOrgRoute } from "@/lib/route-helpers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type Params = { params: Promise<{ id: string }> };
+type Params = { id: string };
 
 /**
  * POST /api/orgs/[id]/provision
@@ -19,46 +18,27 @@ type Params = { params: Promise<{ id: string }> };
  *
  * Idempotent — safe to hit repeatedly. Only the org owner can trigger.
  */
-export async function POST(req: NextRequest, { params }: Params) {
-  const auth = await currentAuth(req);
-  if (!auth) {
-    return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
-  }
-  if (auth.agentId) {
-    return NextResponse.json(
-      { error: "agent_principals_cannot_manage_orgs" },
-      { status: 403 },
-    );
-  }
-  const { user } = auth;
+export const POST = authedOrgRoute<Params>(
+  async ({ organizationId }) => {
+    try {
+      await provisionTenant(organizationId);
+    } catch (err) {
+      console.error(`[provision] ${organizationId} failed:`, err);
+      return NextResponse.json(
+        {
+          error: "provisioning_failed",
+          detail: err instanceof Error ? err.message : String(err),
+        },
+        { status: 500 },
+      );
+    }
 
-  const { id: orgId } = await params;
+    const tenant = await prisma.tenant.findUnique({
+      where: { organizationId },
+      select: { status: true, schemaVersion: true, databaseName: true },
+    });
 
-  const membership = await prisma.organizationMembership.findFirst({
-    where: { userId: user.id, organizationId: orgId },
-    select: { role: true },
-  });
-  if (!membership || !canManageOrg(membership.role as OrgRole)) {
-    return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  }
-
-  try {
-    await provisionTenant(orgId);
-  } catch (err) {
-    console.error(`[provision] ${orgId} failed:`, err);
-    return NextResponse.json(
-      {
-        error: "provisioning_failed",
-        detail: err instanceof Error ? err.message : String(err),
-      },
-      { status: 500 },
-    );
-  }
-
-  const tenant = await prisma.tenant.findUnique({
-    where: { organizationId: orgId },
-    select: { status: true, schemaVersion: true, databaseName: true },
-  });
-
-  return NextResponse.json({ ok: true, tenant });
-}
+    return { ok: true, tenant };
+  },
+  { orgIdParam: "id", minRole: "owner" },
+);

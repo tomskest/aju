@@ -89,7 +89,7 @@ func FilesList(args []string) error {
 		Examples: []string{
 			"aju files list",
 			"aju files list --category receipts",
-			"aju files list --brain Crewpoint --json",
+			"aju files list --brain Acme --json",
 		},
 	})
 	if err := parseFlags(fs, args); err != nil {

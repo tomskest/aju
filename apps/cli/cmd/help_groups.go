@@ -28,7 +28,7 @@ Subcommands:
 Examples:
   aju keys list
   aju keys create "laptop" --scopes read,write --expires-days 365
-  aju keys create "prod-ci" --org crewpoint --scopes read
+  aju keys create "prod-ci" --org acme --scopes read
   aju keys revoke ak_live_12
   aju keys update
 
@@ -119,7 +119,7 @@ Subcommands:
 
 Examples:
   aju orgs list
-  aju orgs switch crewpoint
+  aju orgs switch acme
   aju orgs invite alex@example.com --role admin
   aju orgs members
 
@@ -154,7 +154,7 @@ Tip:
 
 Examples:
   aju profiles list
-  aju profiles use crewpoint
+  aju profiles use acme
   aju profiles remove stale-profile --yes
   AJU_PROFILE=work aju search "quarterly goals"
 `)
@@ -179,7 +179,7 @@ Subcommands:
 Examples:
   aju brains list
   aju brains create "Personal"
-  aju brains create "Crewpoint" --type org
+  aju brains create "Acme" --type org
   aju brains switch Personal
   aju brains delete "stale-brain" --yes
 

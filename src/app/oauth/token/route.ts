@@ -55,16 +55,6 @@ function tokenError(
   });
 }
 
-function tokenSuccess(body: Record<string, unknown>): NextResponse {
-  return NextResponse.json(body, {
-    status: 200,
-    headers: {
-      "Cache-Control": "no-store",
-      Pragma: "no-cache",
-    },
-  });
-}
-
 /**
  * Extract client credentials from either HTTP Basic auth or the request body.
  * Returns null for public clients (no credentials presented).

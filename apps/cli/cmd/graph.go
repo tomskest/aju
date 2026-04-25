@@ -20,7 +20,7 @@ func Backlinks(args []string) error {
 		Usage:   "aju backlinks <path> [--brain <name>] [--json]",
 		Examples: []string{
 			"aju backlinks 03-Product/okrs.md",
-			"aju backlinks 03-Product/okrs.md --brain Crewpoint --json",
+			"aju backlinks 03-Product/okrs.md --brain Acme --json",
 		},
 	})
 	if err := parseFlags(fs, args); err != nil {

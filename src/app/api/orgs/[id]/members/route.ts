@@ -1,6 +1,7 @@
-import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { currentAuth } from "@/lib/auth";
+import { authedOrgRoute } from "@/lib/route-helpers";
+
+type Params = { id: string };
 
 /**
  * GET /api/orgs/[id]/members
@@ -8,54 +9,26 @@ import { currentAuth } from "@/lib/auth";
  * List members of the organization. Requires the caller to be a member of
  * the org (any role).
  */
-export async function GET(
-  req: NextRequest,
-  ctx: { params: Promise<{ id: string }> },
-) {
-  const { id: organizationId } = await ctx.params;
-
-  const auth = await currentAuth(req);
-  if (!auth) {
-    return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
-  }
-  if (auth.agentId) {
-    return NextResponse.json(
-      { error: "agent_principals_cannot_manage_orgs" },
-      { status: 403 },
-    );
-  }
-  const { user } = auth;
-
-  const callerMembership = await prisma.organizationMembership.findUnique({
-    where: {
-      organizationId_userId: {
-        organizationId,
-        userId: user.id,
+export const GET = authedOrgRoute<Params>(
+  async ({ organizationId }) => {
+    const rows = await prisma.organizationMembership.findMany({
+      where: { organizationId },
+      include: {
+        user: { select: { id: true, email: true, name: true } },
       },
-    },
-    select: { role: true },
-  });
+      orderBy: { createdAt: "asc" },
+    });
 
-  if (!callerMembership) {
-    return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  }
-
-  const rows = await prisma.organizationMembership.findMany({
-    where: { organizationId },
-    include: {
-      user: { select: { id: true, email: true, name: true } },
-    },
-    orderBy: { createdAt: "asc" },
-  });
-
-  const members = rows.map((m) => ({
-    userId: m.user.id,
-    email: m.user.email,
-    name: m.user.name,
-    role: m.role,
-    invitedAt: m.invitedAt,
-    acceptedAt: m.acceptedAt,
-  }));
-
-  return NextResponse.json({ members });
-}
+    return {
+      members: rows.map((m) => ({
+        userId: m.user.id,
+        email: m.user.email,
+        name: m.user.name,
+        role: m.role,
+        invitedAt: m.invitedAt,
+        acceptedAt: m.acceptedAt,
+      })),
+    };
+  },
+  { orgIdParam: "id" },
+);

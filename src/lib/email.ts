@@ -140,33 +140,6 @@ export function orgInvitationEmail(args: {
   return { to, subject, html, text };
 }
 
-export function accessRequestSubmittedEmail(args: {
-  to: string;
-  orgName: string;
-}) {
-  const { to, orgName } = args;
-  const safeOrg = escapeHtml(orgName);
-  const subject = `Access request to ${orgName} is pending`;
-  const text = `Your request to join ${orgName} on aju is pending review.\n\nWe'll email you when an admin responds.\n\n— aju.sh · TARK Technology OÜ`;
-  const html = `
-<!doctype html>
-<html>
-  <body style="${SHELL_STYLES}">
-    <table role="presentation" width="100%" style="${TABLE_STYLES}">
-      <tr><td style="padding-bottom:32px;">
-        <div style="${LOGO_STYLES}">aju</div>
-      </td></tr>
-      <tr><td style="padding-bottom:24px;${BODY_STYLES}">
-        Your request to join <strong>${safeOrg}</strong> on aju is pending review. We'll email you when an admin responds.
-      </td></tr>
-      <tr><td style="${FOOTER_STYLES}">
-        aju.sh &middot; TARK Technology OÜ
-      </td></tr>
-    </table>
-  </body>
-</html>`;
-  return { to, subject, html, text };
-}
 
 export function accessRequestReviewEmail(args: {
   to: string;

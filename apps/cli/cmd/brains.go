@@ -96,7 +96,7 @@ func BrainsCreate(args []string) error {
 to every member of the org.`,
 		Examples: []string{
 			"aju brains create Personal",
-			"aju brains create Crewpoint --type org",
+			"aju brains create Acme --type org",
 		},
 	})
 	if err := parseFlags(fs, args); err != nil {
@@ -201,7 +201,7 @@ Usage:
 
 Examples:
   aju brains switch Personal
-  aju brains switch Crewpoint
+  aju brains switch Acme
 `)
 		return nil
 	}
