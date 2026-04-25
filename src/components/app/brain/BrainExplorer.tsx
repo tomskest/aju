@@ -28,17 +28,30 @@ type Props = {
   missingHint: string | null;
 };
 
+type FolderNode = {
+  type: "folder";
+  name: string;
+  path: string;
+  children: TreeNode[];
+};
+type DocNode = {
+  type: "doc";
+  name: string;
+  path: string;
+  doc: DocSummary;
+};
+type TreeNode = FolderNode | DocNode;
+
+type CreateMode = "doc" | "folder";
+
 /**
- * In-browser explorer for a single brain. Sidebar lists every doc grouped
- * by directory; main pane renders the currently-focused doc and toggles
- * into an editable textarea on demand. New-doc dialog posts to
- * `/api/vault/create` and navigates to the result; edits POST to
- * `/api/vault/update` and refresh the page so the rendered markdown
- * reflects the new content (including any auto-link insertions).
+ * In-browser explorer for a single brain. Sidebar renders a recursive
+ * folder tree inferred from doc paths; main pane shows the focused doc
+ * and toggles into an edit textarea on demand.
  *
- * Kept intentionally simple — single client component, no per-doc local
- * caching, no draft persistence. Every save round-trips through the API
- * so the server-side auto-link / rebuild-links / embedding pipeline runs.
+ * Styled to match the public KB chrome — dark theme, mono labels,
+ * accent-green active dots — so brain editing feels like a lightweight
+ * cloud wiki rather than a generic CRUD app.
  */
 export default function BrainExplorer({
   brainName,
@@ -57,14 +70,45 @@ export default function BrainExplorer({
   const [creating, setCreating] = useState<{
     path: string;
     seed: string;
+    mode: CreateMode;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [openFolders, setOpenFolders] = useState<Set<string>>(() =>
+    initialOpenFolders(currentPath),
+  );
 
-  // Group docs by directory for a tidy tree-ish sidebar.
-  const grouped = useMemo(() => groupByDirectory(docs), [docs]);
+  const tree = useMemo(() => buildTree(docs), [docs]);
 
   const dirty =
     editing && currentDoc !== null && editorContent !== currentDoc.content;
+
+  const toggleFolder = (path: string) => {
+    setOpenFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
+  const openCreateDoc = (folder?: string) => {
+    const prefix = folder ? `${folder}/` : "";
+    setCreating({
+      path: missingHint
+        ? `${slugifyPath(missingHint)}.md`
+        : `${prefix}untitled.md`,
+      seed: missingHint ? `# ${missingHint}\n\n` : "",
+      mode: "doc",
+    });
+  };
+
+  const openCreateFolder = () => {
+    setCreating({
+      path: "new-folder/README.md",
+      seed: "",
+      mode: "folder",
+    });
+  };
 
   const handleSave = async () => {
     if (!currentDoc) return;
@@ -98,10 +142,14 @@ export default function BrainExplorer({
       setError("Path must end in .md");
       return;
     }
-    const seedTitle = path.split("/").pop()?.replace(/\.md$/, "") || "Untitled";
+    const seedTitle =
+      path.split("/").pop()?.replace(/\.md$/, "") || "Untitled";
+    const folderTitle = path.split("/").slice(-2, -1)[0] || seedTitle;
     const seedBody = creating.seed
       ? creating.seed
-      : `# ${seedTitle}\n\n`;
+      : creating.mode === "folder"
+        ? `# ${humanize(folderTitle)}\n\nLanding doc for the \`${folderTitle}\` folder.\n`
+        : `# ${humanize(seedTitle)}\n\n`;
     const res = await fetch(
       `/api/vault/create?brain=${encodeURIComponent(brainName)}`,
       {
@@ -145,139 +193,128 @@ export default function BrainExplorer({
   };
 
   return (
-    <div className="flex h-[calc(100vh-4rem)] gap-0">
+    <div className="-mx-5 -my-8 flex h-[calc(100vh-56px)] border-t border-white/5 md:-mx-10 md:-my-10">
       {/* Sidebar */}
-      <aside className="w-72 shrink-0 overflow-y-auto border-r border-[var(--color-line)] bg-[var(--color-shell)] px-3 py-4 text-sm">
-        <div className="mb-3 flex items-center justify-between">
+      <aside className="hidden w-[260px] shrink-0 flex-col overflow-hidden border-r border-white/5 bg-[var(--color-bg)] md:flex">
+        <div className="border-b border-white/5 px-5 py-5">
           <BrainSwitcher current={brainName} brains={brainNames} />
+          <p className="mt-3 font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--color-faint)]">
+            {brainType} · {docs.length} doc{docs.length === 1 ? "" : "s"}
+          </p>
           {canWrite && (
-            <button
-              type="button"
-              onClick={() =>
-                setCreating({
-                  path: missingHint
-                    ? `${slugifyPath(missingHint)}.md`
-                    : "untitled.md",
-                  seed: "",
-                })
-              }
-              title="New document"
-              className="rounded border border-[var(--color-line)] px-2 py-0.5 text-xs hover:bg-[var(--color-tint)]"
-            >
-              + New
-            </button>
+            <div className="mt-4 flex gap-2">
+              <button
+                type="button"
+                onClick={() => openCreateDoc()}
+                className="flex-1 rounded-md border border-white/10 px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--color-muted)] transition hover:border-white/20 hover:text-[var(--color-ink)]"
+              >
+                + doc
+              </button>
+              <button
+                type="button"
+                onClick={openCreateFolder}
+                className="flex-1 rounded-md border border-white/10 px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--color-muted)] transition hover:border-white/20 hover:text-[var(--color-ink)]"
+              >
+                + folder
+              </button>
+            </div>
           )}
         </div>
 
-        <div className="mb-2 text-xs uppercase tracking-wider text-[var(--color-faint)]">
-          {docs.length} document{docs.length === 1 ? "" : "s"} · {brainType}
-        </div>
-
-        {grouped.length === 0 && (
-          <p className="mt-4 text-xs text-[var(--color-faint)]">
-            No documents yet.
-            {canWrite && " Click + New to start."}
-          </p>
-        )}
-
-        <nav className="space-y-3">
-          {grouped.map(({ dir, items }) => (
-            <div key={dir}>
-              {dir !== "" && (
-                <div className="mb-1 text-[11px] font-medium uppercase tracking-wider text-[var(--color-faint)]">
-                  {dir}
-                </div>
-              )}
-              <ul className="space-y-0.5">
-                {items.map((d) => {
-                  const active = d.path === currentPath;
-                  return (
-                    <li key={d.id}>
-                      <Link
-                        href={`/app/brain/${encodeURIComponent(brainName)}/${d.path
-                          .split("/")
-                          .map(encodeURIComponent)
-                          .join("/")}`}
-                        className={`block truncate rounded px-2 py-1 text-sm leading-tight hover:bg-[var(--color-tint)] ${
-                          active ? "bg-[var(--color-tint)] font-medium" : ""
-                        }`}
-                        title={d.path}
-                      >
-                        {d.title}
-                      </Link>
-                    </li>
-                  );
-                })}
-              </ul>
+        <nav className="flex-1 overflow-y-auto px-2 py-4">
+          {tree.length === 0 ? (
+            <p className="px-3 font-mono text-[11px] text-[var(--color-faint)]">
+              empty brain
+              {canWrite && " — click + doc to start"}
+            </p>
+          ) : (
+            <div className="flex flex-col gap-0.5">
+              {tree.map((node) => (
+                <TreeRow
+                  key={node.path}
+                  node={node}
+                  depth={0}
+                  brainName={brainName}
+                  currentPath={currentPath}
+                  openFolders={openFolders}
+                  canWrite={canWrite}
+                  onToggleFolder={toggleFolder}
+                  onAddInFolder={openCreateDoc}
+                />
+              ))}
             </div>
-          ))}
+          )}
         </nav>
       </aside>
 
       {/* Main pane */}
-      <main className="flex-1 overflow-y-auto bg-[var(--color-paper)]">
+      <main className="flex-1 overflow-y-auto bg-[var(--color-bg)]">
         {currentDoc ? (
-          <div className="mx-auto max-w-[820px] px-8 py-6">
-            <div className="mb-4 flex items-center justify-between gap-4 border-b border-[var(--color-line)] pb-3">
-              <div className="min-w-0">
-                <div className="truncate font-mono text-xs text-[var(--color-faint)]">
-                  {currentDoc.path}
-                </div>
-                <div className="text-xs text-[var(--color-faint)]">
-                  {currentDoc.wordCount} words · updated{" "}
-                  {new Date(currentDoc.updatedAt).toLocaleString()}
-                </div>
+          <article className="mx-auto max-w-[760px] px-6 py-10 md:px-10">
+            <header className="mb-8 border-b border-white/5 pb-6">
+              <p className="font-mono text-[11px] text-[var(--color-faint)]">
+                {currentDoc.path}
+              </p>
+              <div className="mt-3 flex items-baseline justify-between gap-4">
+                <h1 className="text-[32px] font-light leading-tight tracking-[-0.02em] text-[var(--color-ink)]">
+                  {currentDoc.title}
+                </h1>
+                <p className="shrink-0 font-mono text-[11px] text-[var(--color-faint)]">
+                  {currentDoc.wordCount} words ·{" "}
+                  {new Date(currentDoc.updatedAt).toLocaleDateString()}
+                </p>
               </div>
-              <div className="flex shrink-0 gap-2">
-                {canWrite && !editing && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEditing(true);
-                      setEditorContent(currentDoc.content);
-                    }}
-                    className="rounded border border-[var(--color-line)] px-3 py-1 text-sm hover:bg-[var(--color-tint)]"
-                  >
-                    Edit
-                  </button>
-                )}
-                {canWrite && editing && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setEditing(false);
-                        setEditorContent(currentDoc.content);
-                      }}
-                      className="rounded border border-[var(--color-line)] px-3 py-1 text-sm hover:bg-[var(--color-tint)]"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleSave}
-                      disabled={!dirty || isPending}
-                      className="rounded bg-[var(--color-ink)] px-3 py-1 text-sm text-[var(--color-paper)] disabled:opacity-50"
-                    >
-                      {dirty ? "Save" : "Saved"}
-                    </button>
-                  </>
-                )}
-                {canWrite && !editing && (
-                  <button
-                    type="button"
-                    onClick={handleDelete}
-                    className="rounded border border-[var(--color-line)] px-2 py-1 text-sm text-red-600 hover:bg-red-50"
-                    title="Delete document"
-                  >
-                    Delete
-                  </button>
-                )}
-              </div>
-            </div>
+              {canWrite && (
+                <div className="mt-5 flex gap-2">
+                  {!editing ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditing(true);
+                          setEditorContent(currentDoc.content);
+                        }}
+                        className="rounded-md border border-white/10 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--color-muted)] transition hover:border-white/20 hover:text-[var(--color-ink)]"
+                      >
+                        edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleDelete}
+                        className="rounded-md border border-white/10 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--color-muted)] transition hover:border-red-500/40 hover:text-red-400"
+                      >
+                        delete
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditing(false);
+                          setEditorContent(currentDoc.content);
+                          setError(null);
+                        }}
+                        className="rounded-md border border-white/10 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--color-muted)] transition hover:border-white/20 hover:text-[var(--color-ink)]"
+                      >
+                        cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleSave}
+                        disabled={!dirty || isPending}
+                        className="rounded-md bg-[var(--color-accent)] px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--color-bg)] transition hover:brightness-110 disabled:opacity-40"
+                      >
+                        {isPending ? "saving" : dirty ? "save" : "saved"}
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+            </header>
 
             {error && (
-              <div className="mb-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              <div className="mb-4 rounded-md border border-red-500/40 bg-red-500/5 px-3 py-2 font-mono text-[11px] text-red-400">
                 {error}
               </div>
             )}
@@ -287,24 +324,30 @@ export default function BrainExplorer({
                 value={editorContent}
                 onChange={(e) => setEditorContent(e.target.value)}
                 spellCheck={false}
-                className="min-h-[60vh] w-full resize-y rounded border border-[var(--color-line)] bg-[var(--color-paper)] p-3 font-mono text-sm leading-relaxed focus:border-[var(--color-ink)] focus:outline-none"
+                className="min-h-[60vh] w-full resize-y rounded-md border border-white/10 bg-[var(--color-panel)] p-4 font-mono text-[13px] leading-relaxed text-[var(--color-ink)] focus:border-[var(--color-accent)]/40 focus:outline-none"
               />
             ) : (
-              <article
-                className="prose prose-sm max-w-none [&_a.wikilink-missing]:text-red-600 [&_a.wikilink]:underline [&_a.wikilink]:decoration-dotted"
+              <div
+                className="kb-prose"
                 dangerouslySetInnerHTML={{ __html: currentDoc.rendered }}
               />
             )}
-          </div>
+          </article>
         ) : missingHint ? (
-          <div className="mx-auto max-w-[640px] px-8 py-12 text-center">
-            <h1 className="mb-3 text-xl font-semibold">Document not found</h1>
-            <p className="mb-4 text-sm text-[var(--color-faint)]">
-              No document exists at the path linked from another doc:
+          <div className="mx-auto max-w-[640px] px-6 py-20 md:px-10">
+            <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--color-faint)]">
+              not found
             </p>
-            <code className="mb-4 block rounded bg-[var(--color-tint)] px-3 py-2 font-mono text-sm">
-              {missingHint}
-            </code>
+            <h1 className="mt-3 text-[28px] font-light tracking-[-0.02em] text-[var(--color-ink)]">
+              No document at this path
+            </h1>
+            <p className="mt-3 text-[14px] leading-relaxed text-[var(--color-muted)]">
+              Another doc links to{" "}
+              <code className="rounded bg-[var(--color-panel)] px-1.5 py-0.5 font-mono text-[12px] text-[var(--color-ink)]">
+                {missingHint}
+              </code>{" "}
+              but it doesn&rsquo;t exist yet.
+            </p>
             {canWrite && (
               <button
                 type="button"
@@ -312,45 +355,60 @@ export default function BrainExplorer({
                   setCreating({
                     path: `${slugifyPath(missingHint)}.md`,
                     seed: `# ${missingHint}\n\n`,
+                    mode: "doc",
                   })
                 }
-                className="rounded bg-[var(--color-ink)] px-4 py-2 text-sm text-[var(--color-paper)]"
+                className="mt-6 inline-flex rounded-md bg-[var(--color-accent)] px-4 py-2 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--color-bg)] transition hover:brightness-110"
               >
-                Create this document
+                create this doc
               </button>
             )}
           </div>
         ) : (
-          <div className="mx-auto max-w-[640px] px-8 py-12 text-center">
-            <h1 className="mb-3 text-xl font-semibold">{brainName}</h1>
-            <p className="text-sm text-[var(--color-faint)]">
+          <div className="mx-auto max-w-[640px] px-6 py-20 md:px-10">
+            <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--color-faint)]">
+              {brainType} brain
+            </p>
+            <h1 className="mt-3 text-[40px] font-light tracking-[-0.03em] text-[var(--color-ink)]">
+              {brainName}
+            </h1>
+            <p className="mt-3 text-[14px] leading-relaxed text-[var(--color-muted)]">
               {docs.length === 0
-                ? "This brain is empty."
-                : "Pick a document from the sidebar."}
+                ? "Empty for now."
+                : "Pick a document from the tree to read or edit."}
+              {canWrite &&
+                docs.length === 0 &&
+                " Click + doc in the sidebar to create the first one."}
             </p>
             {canWrite && docs.length === 0 && (
               <button
                 type="button"
-                onClick={() =>
-                  setCreating({ path: "untitled.md", seed: "" })
-                }
-                className="mt-4 rounded bg-[var(--color-ink)] px-4 py-2 text-sm text-[var(--color-paper)]"
+                onClick={() => openCreateDoc()}
+                className="mt-6 inline-flex rounded-md bg-[var(--color-accent)] px-4 py-2 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--color-bg)] transition hover:brightness-110"
               >
-                Create first document
+                + new doc
               </button>
             )}
           </div>
         )}
       </main>
 
-      {/* Create dialog */}
       {creating && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
-          <div className="w-full max-w-md rounded-lg border border-[var(--color-line)] bg-[var(--color-paper)] p-5">
-            <h2 className="mb-3 text-lg font-semibold">New document</h2>
-            <label className="mb-1 block text-xs uppercase tracking-wider text-[var(--color-faint)]">
-              Path (must end in .md)
-            </label>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-lg border border-white/10 bg-[var(--color-panel)] p-6">
+            <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--color-faint)]">
+              {creating.mode === "folder" ? "new folder" : "new doc"}
+            </p>
+            <h2 className="mt-2 text-[20px] font-light tracking-[-0.02em] text-[var(--color-ink)]">
+              {creating.mode === "folder"
+                ? "Create a folder"
+                : "Create a document"}
+            </h2>
+            <p className="mt-2 font-mono text-[11px] leading-relaxed text-[var(--color-faint)]">
+              {creating.mode === "folder"
+                ? "Folders are virtual — pick a path; we'll seed it with a README."
+                : "Path must end in .md. Use slashes for folders."}
+            </p>
             <input
               type="text"
               value={creating.path}
@@ -358,29 +416,34 @@ export default function BrainExplorer({
                 setCreating({ ...creating, path: e.target.value })
               }
               autoFocus
-              className="mb-3 w-full rounded border border-[var(--color-line)] bg-[var(--color-paper)] px-2 py-1 font-mono text-sm focus:border-[var(--color-ink)] focus:outline-none"
-              placeholder="topics/my-note.md"
+              spellCheck={false}
+              className="mt-4 w-full rounded-md border border-white/10 bg-[var(--color-bg)] px-3 py-2 font-mono text-[13px] text-[var(--color-ink)] focus:border-[var(--color-accent)]/40 focus:outline-none"
+              placeholder={
+                creating.mode === "folder"
+                  ? "folder-name/README.md"
+                  : "topics/my-note.md"
+              }
             />
             {error && (
-              <div className="mb-3 text-sm text-red-700">{error}</div>
+              <p className="mt-3 font-mono text-[11px] text-red-400">{error}</p>
             )}
-            <div className="flex justify-end gap-2">
+            <div className="mt-5 flex justify-end gap-2">
               <button
                 type="button"
                 onClick={() => {
                   setCreating(null);
                   setError(null);
                 }}
-                className="rounded border border-[var(--color-line)] px-3 py-1 text-sm hover:bg-[var(--color-tint)]"
+                className="rounded-md border border-white/10 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--color-muted)] transition hover:border-white/20 hover:text-[var(--color-ink)]"
               >
-                Cancel
+                cancel
               </button>
               <button
                 type="button"
                 onClick={handleCreate}
-                className="rounded bg-[var(--color-ink)] px-3 py-1 text-sm text-[var(--color-paper)]"
+                className="rounded-md bg-[var(--color-accent)] px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--color-bg)] transition hover:brightness-110"
               >
-                Create
+                create
               </button>
             </div>
           </div>
@@ -390,9 +453,108 @@ export default function BrainExplorer({
   );
 }
 
-/**
- * Compact dropdown to switch the active brain in the same explorer URL.
- */
+function TreeRow({
+  node,
+  depth,
+  brainName,
+  currentPath,
+  openFolders,
+  canWrite,
+  onToggleFolder,
+  onAddInFolder,
+}: {
+  node: TreeNode;
+  depth: number;
+  brainName: string;
+  currentPath: string | null;
+  openFolders: Set<string>;
+  canWrite: boolean;
+  onToggleFolder: (path: string) => void;
+  onAddInFolder: (folder: string) => void;
+}) {
+  const indent = depth * 12;
+  if (node.type === "doc") {
+    const active = node.path === currentPath;
+    return (
+      <Link
+        href={`/app/brain/${encodeURIComponent(brainName)}/${node.path
+          .split("/")
+          .map(encodeURIComponent)
+          .join("/")}`}
+        title={node.path}
+        className={`group flex items-center gap-2 rounded-md py-1 pr-3 text-[13px] transition ${
+          active
+            ? "bg-[var(--color-panel)] text-[var(--color-ink)]"
+            : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+        }`}
+        style={{ paddingLeft: 12 + indent }}
+      >
+        <span
+          aria-hidden
+          className={`size-[6px] shrink-0 rounded-full transition ${
+            active
+              ? "bg-[var(--color-accent)] shadow-[0_0_8px_rgba(34,197,94,0.7)]"
+              : "bg-transparent group-hover:bg-[var(--color-faint)]"
+          }`}
+        />
+        <span className="truncate">{node.doc.title}</span>
+      </Link>
+    );
+  }
+
+  const open = openFolders.has(node.path);
+  const docCount = countDocs(node);
+  return (
+    <div className="flex flex-col">
+      <div
+        className="group flex items-center gap-1.5 rounded-md py-1 pr-2 transition hover:text-[var(--color-muted)]"
+        style={{ paddingLeft: 8 + indent }}
+      >
+        <button
+          type="button"
+          onClick={() => onToggleFolder(node.path)}
+          className="flex flex-1 items-center gap-1.5 truncate text-left font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--color-faint)] transition hover:text-[var(--color-ink)]"
+        >
+          <span
+            aria-hidden
+            className={`inline-block w-2 text-[8px] transition-transform ${
+              open ? "rotate-90" : ""
+            }`}
+          >
+            ▶
+          </span>
+          <span className="truncate">{node.name}</span>
+          <span className="ml-1 text-[var(--color-faint)]/70">{docCount}</span>
+        </button>
+        {canWrite && (
+          <button
+            type="button"
+            onClick={() => onAddInFolder(node.path)}
+            title={`New doc in ${node.path}/`}
+            className="hidden text-[var(--color-faint)] transition hover:text-[var(--color-ink)] group-hover:inline"
+          >
+            <span className="font-mono text-[12px] leading-none">+</span>
+          </button>
+        )}
+      </div>
+      {open &&
+        node.children.map((child) => (
+          <TreeRow
+            key={child.path}
+            node={child}
+            depth={depth + 1}
+            brainName={brainName}
+            currentPath={currentPath}
+            openFolders={openFolders}
+            canWrite={canWrite}
+            onToggleFolder={onToggleFolder}
+            onAddInFolder={onAddInFolder}
+          />
+        ))}
+    </div>
+  );
+}
+
 function BrainSwitcher({
   current,
   brains,
@@ -407,7 +569,7 @@ function BrainSwitcher({
       onChange={(e) =>
         router.push(`/app/brain/${encodeURIComponent(e.target.value)}`)
       }
-      className="max-w-[180px] truncate rounded border border-[var(--color-line)] bg-[var(--color-paper)] px-2 py-1 font-mono text-xs"
+      className="w-full truncate rounded-md border border-white/10 bg-[var(--color-bg)] px-3 py-2 font-mono text-[12px] text-[var(--color-ink)] focus:border-[var(--color-accent)]/40 focus:outline-none"
     >
       {brains.map((n) => (
         <option key={n} value={n}>
@@ -418,24 +580,75 @@ function BrainSwitcher({
   );
 }
 
-function groupByDirectory(
-  docs: DocSummary[],
-): Array<{ dir: string; items: DocSummary[] }> {
-  const map = new Map<string, DocSummary[]>();
-  for (const d of docs) {
-    const idx = d.path.lastIndexOf("/");
-    const dir = idx === -1 ? "" : d.path.slice(0, idx);
-    const arr = map.get(dir) ?? [];
-    arr.push(d);
-    map.set(dir, arr);
+function buildTree(docs: DocSummary[]): TreeNode[] {
+  const root: TreeNode[] = [];
+
+  function findOrCreateFolder(
+    parent: TreeNode[],
+    name: string,
+    path: string,
+  ): FolderNode {
+    let folder = parent.find(
+      (n): n is FolderNode => n.type === "folder" && n.name === name,
+    );
+    if (!folder) {
+      folder = { type: "folder", name, path, children: [] };
+      parent.push(folder);
+    }
+    return folder;
   }
-  // Sort: empty dir first, then alpha.
-  const dirs = [...map.keys()].sort((a, b) => {
-    if (a === "") return -1;
-    if (b === "") return 1;
-    return a.localeCompare(b);
-  });
-  return dirs.map((dir) => ({ dir, items: map.get(dir)! }));
+
+  for (const doc of docs) {
+    const parts = doc.path.split("/");
+    if (parts.length === 1) {
+      root.push({ type: "doc", name: parts[0], path: doc.path, doc });
+      continue;
+    }
+    let level = root;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const segPath = parts.slice(0, i + 1).join("/");
+      const folder = findOrCreateFolder(level, parts[i], segPath);
+      level = folder.children;
+    }
+    level.push({
+      type: "doc",
+      name: parts[parts.length - 1],
+      path: doc.path,
+      doc,
+    });
+  }
+
+  function sortRecursive(level: TreeNode[]) {
+    level.sort((a, b) => {
+      if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    for (const n of level) {
+      if (n.type === "folder") sortRecursive(n.children);
+    }
+  }
+  sortRecursive(root);
+
+  return root;
+}
+
+function initialOpenFolders(currentPath: string | null): Set<string> {
+  const open = new Set<string>();
+  if (!currentPath) return open;
+  const parts = currentPath.split("/");
+  for (let i = 1; i < parts.length; i++) {
+    open.add(parts.slice(0, i).join("/"));
+  }
+  return open;
+}
+
+function countDocs(node: FolderNode): number {
+  let count = 0;
+  for (const c of node.children) {
+    if (c.type === "doc") count++;
+    else count += countDocs(c);
+  }
+  return count;
 }
 
 function slugifyPath(s: string): string {
@@ -445,4 +658,12 @@ function slugifyPath(s: string): string {
     .replace(/[^a-z0-9/.-]+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
+}
+
+function humanize(slug: string): string {
+  return slug
+    .replace(/[-_]+/g, " ")
+    .replace(/\.md$/, "")
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .trim();
 }

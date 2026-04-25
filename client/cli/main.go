@@ -110,6 +110,8 @@ func main() {
 		exitWith(cmd.Graph(rest))
 	case "rebuild-links":
 		exitWith(cmd.RebuildLinks(rest))
+	case "auto-link":
+		exitWith(cmd.AutoLink(rest))
 	case "reindex":
 		exitWith(cmd.Reindex(rest))
 	case "changes":

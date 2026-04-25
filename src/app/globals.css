@@ -196,3 +196,13 @@ body {
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
+
+.kb-prose a.wikilink-missing {
+  color: var(--color-faint);
+  border-bottom-style: dotted;
+  border-bottom-color: var(--color-faint);
+}
+.kb-prose a.wikilink-missing:hover {
+  color: var(--color-muted);
+  border-bottom-color: var(--color-muted);
+}

@@ -31,6 +31,7 @@ Graph:
   related <path>        Show related documents (links + shared tags)
   graph                 Show graph stats (--mode neighbors --path <p> for ego-net)
   rebuild-links         Rebuild the link index
+  auto-link             Insert [[wikilinks]] for mentions of other docs (idempotent)
   reindex               Repopulate FTS, embeddings, and links for the active brain
   changes               Show recent changes (--since, --exclude-source, --limit; --brain a,b or all)
 

@@ -246,6 +246,63 @@ func RebuildLinks(args []string) error {
 	return nil
 }
 
+// AutoLink implements `aju auto-link`. Posts to /api/vault/auto-link and
+// reports how many docs were updated and how many wikilinks were inserted.
+//
+// Auto-link runs server-side on every vault create/update too, so this
+// command is mostly for backfill: re-run after seeding hub docs into a
+// brain so existing content picks up the new wikilink targets.
+func AutoLink(args []string) error {
+	fs := flag.NewFlagSet("auto-link", flag.ContinueOnError)
+	brain := fs.String("brain", "", "brain name (defaults to active brain)")
+	setLeafUsage(fs, leafHelp{
+		Summary: "Re-scan the brain and insert [[wikilinks]] for mentions of other docs.",
+		Usage:   "aju auto-link [--brain <name>]",
+		Long:    "Idempotent — running on a fully-linked brain is a no-op. Existing manually-written wikilinks are never touched. Use after adding hub docs (e.g. customers/oj-travel.md) so prior content links to them retroactively. Always chains a rebuild of the link graph.",
+	})
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+
+	client, cfg, err := loadAuthedClient()
+	if err != nil {
+		return err
+	}
+
+	target := "/api/vault/auto-link"
+	if b := resolveBrainFlag(*brain, cfg); b != "" {
+		target += "?brain=" + url.QueryEscape(b)
+	}
+
+	var resp struct {
+		Brain     string `json:"brain"`
+		AutoLinks struct {
+			Documents  int `json:"documents"`
+			TotalAdded int `json:"totalAdded"`
+			Updated    int `json:"updated"`
+		} `json:"autoLinks"`
+		Links struct {
+			Resolved   int `json:"resolved"`
+			Unresolved int `json:"unresolved"`
+		} `json:"links"`
+		DurationMs int `json:"durationMs"`
+	}
+	if err := client.PostJSON(target, map[string]any{}, &resp); err != nil {
+		return printFriendlyErr(err)
+	}
+	fmt.Printf(
+		"Auto-linked %d/%d docs in %q — added %d wikilink(s); graph: %d resolved, %d unresolved (%d ms).\n",
+		resp.AutoLinks.Updated,
+		resp.AutoLinks.Documents,
+		resp.Brain,
+		resp.AutoLinks.TotalAdded,
+		resp.Links.Resolved,
+		resp.Links.Unresolved,
+		resp.DurationMs,
+	)
+	return nil
+}
+
 // Changes implements `aju changes [--since <ISO>] [--exclude-source <src>] [--limit N]`.
 func Changes(args []string) error {
 	fs := flag.NewFlagSet("changes", flag.ContinueOnError)
