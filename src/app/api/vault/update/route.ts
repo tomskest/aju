@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { Prisma } from "@prisma/client-tenant";
 import { z } from "zod";
 import { parseDocument } from "@/lib/vault";
-import { scheduleRebuildLinks } from "@/lib/vault";
+import { scheduleRebuildLinks, autoLinkDocument } from "@/lib/vault";
 import { updateDocumentEmbedding } from "@/lib/embeddings";
 import { resolveBrain, isBrainError, canWrite } from "@/lib/vault";
 import { authedTenantRoute } from "@/lib/route-helpers";
@@ -78,15 +78,19 @@ export const POST = authedTenantRoute(
       },
     });
 
-    // Rebuild link graph (fire-and-forget, scoped to this brain)
-    scheduleRebuildLinks(tenant, brain.brainId).catch((err) =>
-      console.error("Link rebuild after update failed:", err),
-    );
-
-    // Generate embedding (fire-and-forget)
-    updateDocumentEmbedding(tenant, existing.id).catch((err) =>
-      console.error("Embedding after update failed:", err),
-    );
+    // Auto-link → rebuild graph → refresh embedding. Chained so each
+    // step sees the previous one's writes. See the create route for the
+    // same pattern.
+    autoLinkDocument(tenant, brain.brainId, existing.id)
+      .then(() => {
+        scheduleRebuildLinks(tenant, brain.brainId).catch((err) =>
+          console.error("Link rebuild after update failed:", err),
+        );
+        return updateDocumentEmbedding(tenant, existing.id);
+      })
+      .catch((err) =>
+        console.error("Auto-link / embedding after update failed:", err),
+      );
 
     return updated;
   },

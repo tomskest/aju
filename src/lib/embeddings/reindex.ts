@@ -5,7 +5,7 @@ import {
   prepareDocumentText,
   toVectorLiteral,
 } from "@/lib/embeddings";
-import { rebuildLinks } from "@/lib/vault";
+import { rebuildLinks, autoLinkBrain } from "@/lib/vault";
 
 export type ReindexOptions = {
   /**
@@ -19,12 +19,21 @@ export type ReindexOptions = {
   embeddings?: boolean;
   /** Rebuild the wikilink graph. Default: true. */
   links?: boolean;
+  /**
+   * Run the heuristic auto-linker over every doc in the brain — inserts
+   * `[[wikilinks]]` for mentions of other docs by basename / title /
+   * frontmatter aliases. Idempotent. Default: true. Runs BEFORE the
+   * graph rebuild so any newly-inserted links land in the edge table in
+   * the same pass.
+   */
+  autoLinks?: boolean;
 };
 
 export type ReindexResult = {
   ftsRefreshed: number;
   embeddingsGenerated: number;
   embeddingsFailed: number;
+  autoLinks?: { documents: number; totalAdded: number; updated: number };
   links?: { documents: number; resolved: number; unresolved: number };
   durationMs: number;
 };
@@ -49,12 +58,19 @@ export async function reindexBrain(
   brainId: string,
   opts: ReindexOptions = {},
 ): Promise<ReindexResult> {
-  const { refreshAll = false, fts = true, embeddings = true, links = true } = opts;
+  const {
+    refreshAll = false,
+    fts = true,
+    embeddings = true,
+    links = true,
+    autoLinks = true,
+  } = opts;
   const start = Date.now();
 
   let ftsRefreshed = 0;
   let embeddingsGenerated = 0;
   let embeddingsFailed = 0;
+  let autoLinksResult: ReindexResult["autoLinks"];
   let linksResult: ReindexResult["links"];
 
   if (fts) {
@@ -102,6 +118,12 @@ export async function reindexBrain(
     }
   }
 
+  // Auto-link runs BEFORE the graph rebuild so any newly-inserted
+  // wikilinks land in the edge table in the same reindex pass.
+  if (autoLinks) {
+    autoLinksResult = await autoLinkBrain(tenant, brainId);
+  }
+
   if (links) {
     linksResult = await rebuildLinks(tenant, brainId);
   }
@@ -110,6 +132,7 @@ export async function reindexBrain(
     ftsRefreshed,
     embeddingsGenerated,
     embeddingsFailed,
+    autoLinks: autoLinksResult,
     links: linksResult,
     durationMs: Date.now() - start,
   };

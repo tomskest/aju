@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { Prisma } from "@prisma/client-tenant";
 import { z } from "zod";
 import { parseDocument } from "@/lib/vault";
-import { scheduleRebuildLinks } from "@/lib/vault";
+import { scheduleRebuildLinks, autoLinkDocument } from "@/lib/vault";
 import { updateDocumentEmbedding } from "@/lib/embeddings";
 import { resolveBrain, isBrainError, canWrite } from "@/lib/vault";
 import { enforceDocumentsPerBrainLimit } from "@/lib/billing";
@@ -103,12 +103,21 @@ export const POST = authedTenantRoute(
     const deferIndex = req.nextUrl.searchParams.get("defer_index") === "1";
 
     if (!deferIndex) {
-      scheduleRebuildLinks(tenant, brain.brainId).catch((err) =>
-        console.error("Link rebuild after create failed:", err),
-      );
-      updateDocumentEmbedding(tenant, doc.id).catch((err) =>
-        console.error("Embedding after create failed:", err),
-      );
+      // Auto-link first (may modify the doc body), then rebuild the
+      // graph + embedding. If auto-link adds wikilinks, the rebuild
+      // picks up the new edges and the embedding refresh sees the
+      // updated content. Chained sequentially in one fire-and-forget so
+      // the rebuild doesn't race the auto-link's UPDATE.
+      autoLinkDocument(tenant, brain.brainId, doc.id)
+        .then(() => {
+          scheduleRebuildLinks(tenant, brain.brainId).catch((err) =>
+            console.error("Link rebuild after create failed:", err),
+          );
+          return updateDocumentEmbedding(tenant, doc.id);
+        })
+        .catch((err) =>
+          console.error("Auto-link / embedding after create failed:", err),
+        );
     }
 
     return NextResponse.json(doc, { status: 201 });

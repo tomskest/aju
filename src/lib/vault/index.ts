@@ -12,3 +12,4 @@ export * from "./kb-markdown";
 export * from "./parse";
 export * from "./link-resolver";
 export * from "./rebuild-links";
+export * from "./auto-link";
