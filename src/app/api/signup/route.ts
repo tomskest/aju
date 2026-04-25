@@ -7,13 +7,12 @@ import {
   isPublicEmailDomain,
   getEmailDomain,
 } from "@/lib/billing";
+import { normalizeEmail } from "@/lib/validators";
 
 export const runtime = "nodejs";
 
 const COHORT_CAP = 100;
 const VERIFICATION_TTL_MIN = 30;
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 type Payload = {
   email?: string;
@@ -60,11 +59,11 @@ async function matchOrgByEmailDomain(email: string): Promise<string | null> {
 
 export async function POST(req: NextRequest) {
   const body = (await req.json().catch(() => ({}))) as Payload;
-  const email = body.email?.trim().toLowerCase();
+  const email = normalizeEmail(body.email);
   const turnstileToken = body.turnstileToken;
   const returnTo = safeReturnTo(body.returnTo);
 
-  if (!email || !EMAIL_RE.test(email)) return badRequest("invalid email");
+  if (!email) return badRequest("invalid email");
 
   const remoteIp = req.headers.get("cf-connecting-ip") ?? req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
   const turnstile = await verifyTurnstile(turnstileToken, remoteIp);

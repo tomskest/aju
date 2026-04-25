@@ -5,6 +5,7 @@ import {
   PUBLIC_EMAIL_DOMAINS,
   getEmailDomain,
 } from "@/lib/billing";
+import { normalizeEmail } from "@/lib/validators";
 
 export const runtime = "nodejs";
 
@@ -24,13 +25,15 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  const rawEmail = req.nextUrl.searchParams.get("email");
-  if (!rawEmail) {
-    return NextResponse.json({ error: "missing_email" }, { status: 400 });
+  const email = normalizeEmail(req.nextUrl.searchParams.get("email"));
+  if (!email) {
+    return NextResponse.json({ error: "invalid_email" }, { status: 400 });
   }
-  const email = rawEmail.trim().toLowerCase();
 
-  if (email !== user.email.trim().toLowerCase()) {
+  // User row email is already normalized at signup time. The query email is
+  // normalized above. Direct equality is now case-safe.
+  const sessionEmail = normalizeEmail(user.email);
+  if (sessionEmail !== email) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 

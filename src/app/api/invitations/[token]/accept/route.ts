@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "crypto";
 import { prisma } from "@/lib/db";
 import { currentAuth, setActiveOrganizationId } from "@/lib/auth";
+import { normalizeEmail } from "@/lib/validators";
 
 function hashInviteToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
@@ -62,7 +63,9 @@ export async function POST(
     );
   }
 
-  if (invitation.email.toLowerCase() !== user.email.toLowerCase()) {
+  // Both fields should already be normalized at write time, but defensive
+  // re-normalization here means a legacy mixed-case row can't slip through.
+  if (normalizeEmail(invitation.email) !== normalizeEmail(user.email)) {
     return NextResponse.json({ error: "email_mismatch" }, { status: 403 });
   }
 

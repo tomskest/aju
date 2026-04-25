@@ -1,9 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { currentAuth } from "@/lib/auth";
 import { getEmailDomain } from "@/lib/billing";
 import { sendEmail, accessRequestReviewEmail } from "@/lib/email";
 import { authedOrgRoute } from "@/lib/route-helpers";
+import { messageSchema, validateBody } from "@/lib/validators";
+
+const createAccessRequestSchema = z.object({
+  message: messageSchema.optional(),
+});
 
 export const runtime = "nodejs";
 
@@ -61,11 +67,9 @@ export async function POST(
   }
   const { user } = auth;
 
-  const body = (await req.json().catch(() => ({}))) as { message?: unknown };
-  const message =
-    typeof body.message === "string" && body.message.trim()
-      ? body.message.trim().slice(0, 500)
-      : null;
+  const validation = await validateBody(req, createAccessRequestSchema);
+  if (!validation.ok) return validation.response;
+  const message = validation.value.message?.slice(0, 500) || null;
 
   const organization = await prisma.organization.findUnique({
     where: { id: organizationId },

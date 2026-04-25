@@ -50,3 +50,18 @@ export const vaultSourceSchema = z
   .min(1)
   .max(32)
   .regex(/^[a-z0-9_-]+$/, "invalid_source");
+
+// DNS-shaped domain name — used by org domain claims. Lowercased + trimmed
+// before validation. Max 253 chars per RFC 1035; min 3 catches obvious junk.
+export const domainSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .min(3)
+  .max(253)
+  .regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/, "invalid_domain");
+
+// Document body — capped to keep DB rows + embedding payloads bounded.
+// The cap is generous (500K chars ≈ 100K tokens for a chunked doc); large
+// inputs should split into multiple documents.
+export const documentContentSchema = z.string().max(500_000);

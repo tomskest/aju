@@ -1,12 +1,16 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { canManageOrg } from "@/lib/tenant";
 import { PUBLIC_EMAIL_DOMAINS, getEmailDomain } from "@/lib/billing";
 import { authedOrgRoute } from "@/lib/route-helpers";
+import { domainSchema, validateBody } from "@/lib/validators";
 
 export const runtime = "nodejs";
 
 type Params = { id: string };
+
+const claimDomainSchema = z.object({ domain: domainSchema });
 
 /**
  * GET /api/orgs/[id]/domains
@@ -34,12 +38,9 @@ export const GET = authedOrgRoute<Params>(
  */
 export const POST = authedOrgRoute<Params>(
   async ({ req, organizationId, role, user }) => {
-    const body = (await req.json().catch(() => ({}))) as { domain?: unknown };
-    const rawDomain = typeof body.domain === "string" ? body.domain : "";
-    const domain = rawDomain.trim().toLowerCase();
-    if (!domain) {
-      return NextResponse.json({ error: "invalid_domain" }, { status: 400 });
-    }
+    const validation = await validateBody(req, claimDomainSchema);
+    if (!validation.ok) return validation.response;
+    const { domain } = validation.value;
 
     // Owner-only beyond the helper's admin gate.
     if (!canManageOrg(role)) {

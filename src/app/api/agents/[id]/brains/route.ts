@@ -182,6 +182,16 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
       });
       if (!callerAccess) return forbidden();
 
+      // Acquire a transaction-scoped advisory lock on the (brain, agent)
+      // pair so concurrent grant requests serialize. There is no unique
+      // index on (brain_id, agent_id) — adding one needs a tenant-DB
+      // migration (P1) — so without this lock, two concurrent calls could
+      // both observe `existing=null` and both insert, leaving duplicate
+      // grant rows. The lock releases when the surrounding transaction
+      // commits or aborts.
+      const lockKey = `brain-access-grant:${brainId}:agent:${id}`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+
       // Upsert-ish: if a grant already exists, bump its role instead of erroring.
       const existing = await tx.brainAccess.findFirst({
         where: { brainId, agentId: id },

@@ -1,7 +1,14 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { scheduleRebuildLinks } from "@/lib/vault";
 import { resolveBrain, isBrainError, canWrite } from "@/lib/vault";
 import { authedTenantRoute } from "@/lib/route-helpers";
+import { validateBody, vaultPathSchema, vaultSourceSchema } from "@/lib/validators";
+
+const deleteDocSchema = z.object({
+  path: vaultPathSchema,
+  source: vaultSourceSchema,
+});
 
 export const POST = authedTenantRoute(
   async ({ req, tenant, tx, principal }) => {
@@ -15,15 +22,9 @@ export const POST = authedTenantRoute(
       );
     }
 
-    const body = await req.json();
-    const { path, source } = body as { path?: string; source?: string };
-
-    if (!path || !source) {
-      return NextResponse.json(
-        { error: "Missing required fields: path, source" },
-        { status: 400 },
-      );
-    }
+    const validation = await validateBody(req, deleteDocSchema);
+    if (!validation.ok) return validation.response;
+    const { path, source } = validation.value;
 
     const existing = await tx.vaultDocument.findFirst({
       where: { brainId: brain.brainId, path },

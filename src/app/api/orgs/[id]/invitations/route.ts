@@ -1,16 +1,21 @@
 import { NextResponse } from "next/server";
 import { createHash, randomBytes } from "crypto";
+import { z } from "zod";
 import { prisma } from "@/lib/db";
-import { ORG_ROLES, type OrgRole } from "@/lib/tenant";
 import { sendEmail, orgInvitationEmail } from "@/lib/email";
 import { authedOrgRoute } from "@/lib/route-helpers";
+import { emailSchema, orgRoleSchema, validateBody } from "@/lib/validators";
 
 const INVITE_TOKEN_BYTES = 36; // base64url encodes to 48 chars (ceil(36*4/3) = 48)
 const INVITE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
 const INVITE_LIFETIME_HOURS = 7 * 24;
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 type Params = { id: string };
+
+const createInviteSchema = z.object({
+  email: emailSchema,
+  role: orgRoleSchema,
+});
 
 function hashInviteToken(token: string): string {
   // SHA-256 is adequate for invite tokens — the random 48-char input has far
@@ -52,25 +57,9 @@ export const GET = authedOrgRoute<Params>(
  */
 export const POST = authedOrgRoute<Params>(
   async ({ req, organizationId, user }) => {
-    let body: unknown;
-    try {
-      body = await req.json();
-    } catch {
-      return NextResponse.json({ error: "invalid_json" }, { status: 400 });
-    }
-
-    const rawEmail = (body as { email?: unknown })?.email;
-    const rawRole = (body as { role?: unknown })?.role;
-
-    if (typeof rawEmail !== "string" || !EMAIL_RE.test(rawEmail)) {
-      return NextResponse.json({ error: "invalid_email" }, { status: 400 });
-    }
-    const email = rawEmail.trim().toLowerCase();
-
-    if (typeof rawRole !== "string" || !ORG_ROLES.includes(rawRole as OrgRole)) {
-      return NextResponse.json({ error: "invalid_role" }, { status: 400 });
-    }
-    const role = rawRole as OrgRole;
+    const validation = await validateBody(req, createInviteSchema);
+    if (!validation.ok) return validation.response;
+    const { email, role } = validation.value;
 
     const organization = await prisma.organization.findUnique({
       where: { id: organizationId },

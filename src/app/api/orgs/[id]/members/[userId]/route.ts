@@ -1,73 +1,83 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { ORG_ROLES, type OrgRole } from "@/lib/tenant";
 import { authedOrgRoute } from "@/lib/route-helpers";
+import { orgRoleSchema, validateBody } from "@/lib/validators";
 
 type Params = { id: string; userId: string };
 
+const patchMemberSchema = z.object({ role: orgRoleSchema });
+
 /**
- * Count current owners of an organization. Used to guard against demoting or
- * removing the last owner.
+ * Acquire a transaction-scoped advisory lock keyed on `org-owner-guard:<orgId>`.
+ * All "is this the last owner?" checks for the same org serialize behind this
+ * lock, so concurrent role-demotion / removal requests can't both observe
+ * `owners >= 2` and both succeed, leaving the org with zero owners. The lock
+ * releases automatically when the surrounding transaction commits or aborts.
  */
-async function countOwners(organizationId: string): Promise<number> {
-  return prisma.organizationMembership.count({
-    where: { organizationId, role: "owner" },
-  });
+async function lockOwnerGuard(
+  tx: Prisma.TransactionClient,
+  organizationId: string,
+): Promise<void> {
+  const key = `org-owner-guard:${organizationId}`;
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
 }
 
 /**
  * PATCH /api/orgs/[id]/members/[userId]
  *
  * Change a member's role. Requires owner/admin. Rejects demoting the last
- * owner with 400 `last_owner`.
+ * owner with 400 `last_owner`. The owner-count read and the role-update run
+ * inside one transaction with a per-org advisory lock so concurrent
+ * demotions can't both pass the guard.
  */
 export const PATCH = authedOrgRoute<Params>(
   async ({ req, organizationId, params }) => {
     const { userId: targetUserId } = params;
 
-    let body: unknown;
-    try {
-      body = await req.json();
-    } catch {
-      return NextResponse.json({ error: "invalid_json" }, { status: 400 });
-    }
+    const validation = await validateBody(req, patchMemberSchema);
+    if (!validation.ok) return validation.response;
+    const newRole = validation.value.role;
 
-    const role = (body as { role?: unknown })?.role;
-    if (typeof role !== "string" || !ORG_ROLES.includes(role as OrgRole)) {
-      return NextResponse.json({ error: "invalid_role" }, { status: 400 });
-    }
-    const newRole = role as OrgRole;
+    return prisma.$transaction(async (tx) => {
+      await lockOwnerGuard(tx, organizationId);
 
-    const target = await prisma.organizationMembership.findUnique({
-      where: {
-        organizationId_userId: { organizationId, userId: targetUserId },
-      },
-      select: { id: true, role: true },
-    });
+      const target = await tx.organizationMembership.findUnique({
+        where: {
+          organizationId_userId: { organizationId, userId: targetUserId },
+        },
+        select: { id: true, role: true },
+      });
 
-    if (!target) {
-      return NextResponse.json({ error: "not_found" }, { status: 404 });
-    }
-
-    // No-op: same role
-    if (target.role === newRole) {
-      return { ok: true };
-    }
-
-    // Guard: demoting the last owner is forbidden.
-    if (target.role === "owner" && newRole !== "owner") {
-      const owners = await countOwners(organizationId);
-      if (owners <= 1) {
-        return NextResponse.json({ error: "last_owner" }, { status: 400 });
+      if (!target) {
+        return NextResponse.json({ error: "not_found" }, { status: 404 });
       }
-    }
 
-    await prisma.organizationMembership.update({
-      where: { id: target.id },
-      data: { role: newRole },
+      // No-op: same role.
+      if (target.role === newRole) {
+        return NextResponse.json({ ok: true });
+      }
+
+      // Guard: demoting the last owner is forbidden. Count is consistent
+      // because we hold the per-org advisory lock; no concurrent demotion
+      // can move the count out from under us.
+      if (target.role === "owner" && newRole !== "owner") {
+        const owners = await tx.organizationMembership.count({
+          where: { organizationId, role: "owner" },
+        });
+        if (owners <= 1) {
+          return NextResponse.json({ error: "last_owner" }, { status: 400 });
+        }
+      }
+
+      await tx.organizationMembership.update({
+        where: { id: target.id },
+        data: { role: newRole },
+      });
+
+      return NextResponse.json({ ok: true });
     });
-
-    return { ok: true };
   },
   { orgIdParam: "id", minRole: "admin" },
 );
@@ -77,36 +87,41 @@ export const PATCH = authedOrgRoute<Params>(
  *
  * Remove a member from the organization. Requires owner/admin. Rejects
  * removing the last owner (including self-removal in that case) with 400
- * `last_owner`.
+ * `last_owner`. Same lock-then-count-then-mutate pattern as PATCH.
  */
 export const DELETE = authedOrgRoute<Params>(
   async ({ organizationId, params }) => {
     const { userId: targetUserId } = params;
 
-    const target = await prisma.organizationMembership.findUnique({
-      where: {
-        organizationId_userId: { organizationId, userId: targetUserId },
-      },
-      select: { id: true, role: true },
-    });
+    return prisma.$transaction(async (tx) => {
+      await lockOwnerGuard(tx, organizationId);
 
-    if (!target) {
-      return NextResponse.json({ error: "not_found" }, { status: 404 });
-    }
+      const target = await tx.organizationMembership.findUnique({
+        where: {
+          organizationId_userId: { organizationId, userId: targetUserId },
+        },
+        select: { id: true, role: true },
+      });
 
-    // Guard: removing the last owner (including self) is forbidden.
-    if (target.role === "owner") {
-      const owners = await countOwners(organizationId);
-      if (owners <= 1) {
-        return NextResponse.json({ error: "last_owner" }, { status: 400 });
+      if (!target) {
+        return NextResponse.json({ error: "not_found" }, { status: 404 });
       }
-    }
 
-    await prisma.organizationMembership.delete({
-      where: { id: target.id },
+      if (target.role === "owner") {
+        const owners = await tx.organizationMembership.count({
+          where: { organizationId, role: "owner" },
+        });
+        if (owners <= 1) {
+          return NextResponse.json({ error: "last_owner" }, { status: 400 });
+        }
+      }
+
+      await tx.organizationMembership.delete({
+        where: { id: target.id },
+      });
+
+      return NextResponse.json({ ok: true });
     });
-
-    return { ok: true };
   },
   { orgIdParam: "id", minRole: "admin" },
 );

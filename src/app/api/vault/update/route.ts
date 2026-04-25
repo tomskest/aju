@@ -1,10 +1,23 @@
 import { NextResponse } from "next/server";
 import type { Prisma } from "@prisma/client-tenant";
+import { z } from "zod";
 import { parseDocument } from "@/lib/vault";
 import { scheduleRebuildLinks } from "@/lib/vault";
 import { updateDocumentEmbedding } from "@/lib/embeddings";
 import { resolveBrain, isBrainError, canWrite } from "@/lib/vault";
 import { authedTenantRoute } from "@/lib/route-helpers";
+import {
+  documentContentSchema,
+  validateBody,
+  vaultPathSchema,
+  vaultSourceSchema,
+} from "@/lib/validators";
+
+const updateDocSchema = z.object({
+  path: vaultPathSchema,
+  content: documentContentSchema,
+  source: vaultSourceSchema,
+});
 
 export const POST = authedTenantRoute(
   async ({ req, tenant, tx, principal }) => {
@@ -18,19 +31,9 @@ export const POST = authedTenantRoute(
       );
     }
 
-    const body = await req.json();
-    const { path, content, source } = body as {
-      path?: string;
-      content?: string;
-      source?: string;
-    };
-
-    if (!path || !content || !source) {
-      return NextResponse.json(
-        { error: "Missing required fields: path, content, source" },
-        { status: 400 },
-      );
-    }
+    const validation = await validateBody(req, updateDocSchema);
+    if (!validation.ok) return validation.response;
+    const { path, content, source } = validation.value;
 
     const existing = await tx.vaultDocument.findFirst({
       where: { brainId: brain.brainId, path },
