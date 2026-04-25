@@ -20,7 +20,6 @@ type DocFull = DocSummary & {
 type Props = {
   brainName: string;
   brainType: string;
-  brainNames: string[];
   canWrite: boolean;
   docs: DocSummary[];
   currentDoc: DocFull | null;
@@ -56,7 +55,6 @@ type CreateMode = "doc" | "folder";
 export default function BrainExplorer({
   brainName,
   brainType,
-  brainNames,
   canWrite,
   docs,
   currentDoc,
@@ -197,8 +195,10 @@ export default function BrainExplorer({
       {/* Sidebar */}
       <aside className="hidden w-[260px] shrink-0 flex-col overflow-hidden border-r border-white/5 bg-[var(--color-bg)] md:flex">
         <div className="border-b border-white/5 px-5 py-5">
-          <BrainSwitcher current={brainName} brains={brainNames} />
-          <p className="mt-3 font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--color-faint)]">
+          <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-[var(--color-ink)]">
+            {brainName}
+          </p>
+          <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--color-faint)]">
             {brainType} · {docs.length} doc{docs.length === 1 ? "" : "s"}
           </p>
           {canWrite && (
@@ -552,31 +552,6 @@ function TreeRow({
           />
         ))}
     </div>
-  );
-}
-
-function BrainSwitcher({
-  current,
-  brains,
-}: {
-  current: string;
-  brains: string[];
-}) {
-  const router = useRouter();
-  return (
-    <select
-      value={current}
-      onChange={(e) =>
-        router.push(`/app/brain/${encodeURIComponent(e.target.value)}`)
-      }
-      className="w-full truncate rounded-md border border-white/10 bg-[var(--color-bg)] px-3 py-2 font-mono text-[12px] text-[var(--color-ink)] focus:border-[var(--color-accent)]/40 focus:outline-none"
-    >
-      {brains.map((n) => (
-        <option key={n} value={n}>
-          {n}
-        </option>
-      ))}
-    </select>
   );
 }
 

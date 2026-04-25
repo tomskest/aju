@@ -60,7 +60,9 @@ export default async function BrainPage(props: PageProps) {
 
   // Build the sidebar list + (if a path is given) load the focused doc.
   // Done inside withBrainContext so RLS scopes the queries to this brain.
-  const { docs, currentDoc, allBrainNames } = await withBrainContext(
+  // Brain switching is handled by the leftmost rail in (brain)/layout, so
+  // we don't need to fetch the user's full brain list here.
+  const { docs, currentDoc } = await withBrainContext(
     tenant,
     [brain.id],
     async (tx) => {
@@ -103,19 +105,9 @@ export default async function BrainPage(props: PageProps) {
         }
       }
 
-      // For the brain switcher: list every brain this user can access in
-      // this org's tenant.
-      const brainAccessRows = await tx.brainAccess.findMany({
-        where: { userId: user.id },
-        include: { brain: { select: { name: true } } },
-      });
-
       return {
         docs: docRows as DocSummary[],
         currentDoc: current,
-        allBrainNames: brainAccessRows
-          .map((r) => r.brain.name)
-          .sort((a, b) => a.localeCompare(b)),
       };
     },
   );
@@ -124,7 +116,6 @@ export default async function BrainPage(props: PageProps) {
     <BrainExplorer
       brainName={brain.name}
       brainType={brain.type}
-      brainNames={allBrainNames}
       canWrite={canWrite}
       docs={docs}
       currentDoc={currentDoc}
