@@ -13,3 +13,4 @@ export * from "./parse";
 export * from "./link-resolver";
 export * from "./rebuild-links";
 export * from "./auto-link";
+export * from "./render-wikilinks";

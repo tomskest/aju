@@ -218,17 +218,20 @@ export default async function BrainsPage({ searchParams }: PageProps) {
                   key={b.id}
                   className="bg-[var(--color-panel)]/40 transition hover:bg-[var(--color-panel)]/70"
                 >
-                  <Link
-                    href={`/app/brains/${b.id}`}
-                    className="grid grid-cols-1 gap-2 px-5 py-4 md:grid-cols-[1fr_100px_110px_120px] md:items-center md:gap-4"
-                  >
+                  <div className="grid grid-cols-1 gap-2 px-5 py-4 md:grid-cols-[1fr_100px_110px_120px] md:items-center md:gap-4">
                     <div className="flex flex-col gap-0.5">
-                      <span className="font-mono text-[13px] text-[var(--color-ink)]">
+                      <Link
+                        href={`/app/brain/${encodeURIComponent(b.name)}`}
+                        className="font-mono text-[13px] text-[var(--color-ink)] hover:underline"
+                      >
                         {b.name}
-                      </span>
-                      <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--color-faint)]">
-                        id: {b.id}
-                      </span>
+                      </Link>
+                      <Link
+                        href={`/app/brains/${b.id}`}
+                        className="font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--color-faint)] hover:text-[var(--color-ink)]"
+                      >
+                        settings →
+                      </Link>
                     </div>
                     <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--color-muted)]">
                       {b.type}
@@ -239,7 +242,7 @@ export default async function BrainsPage({ searchParams }: PageProps) {
                     <span className="font-mono text-[13px] text-[var(--color-ink)] md:text-right">
                       {b._count.documents}
                     </span>
-                  </Link>
+                  </div>
                 </li>
               );
             })}
