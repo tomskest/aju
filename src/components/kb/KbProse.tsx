@@ -111,6 +111,163 @@ async function loadMermaid(): Promise<typeof import("mermaid").default> {
   return mermaidLoadPromise;
 }
 
+function openMermaidFullscreen(sourceSvg: SVGElement) {
+  const overlay = document.createElement("div");
+  overlay.className = "mermaid-fullscreen";
+  overlay.setAttribute("role", "dialog");
+  overlay.setAttribute("aria-modal", "true");
+  overlay.setAttribute("aria-label", "Diagram fullscreen view");
+
+  const toolbar = document.createElement("div");
+  toolbar.className = "mermaid-fullscreen-toolbar";
+
+  const mkBtn = (label: string, title: string) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "mermaid-fullscreen-btn";
+    b.textContent = label;
+    b.title = title;
+    return b;
+  };
+
+  const zoomOutBtn = mkBtn("−", "Zoom out");
+  const zoomInBtn = mkBtn("+", "Zoom in");
+  const fitBtn = mkBtn("fit", "Fit to screen (0)");
+  const closeBtn = mkBtn("close", "Close (Esc)");
+  toolbar.append(zoomOutBtn, zoomInBtn, fitBtn, closeBtn);
+
+  const hint = document.createElement("div");
+  hint.className = "mermaid-fullscreen-hint";
+  hint.textContent = "drag to pan · scroll to zoom · esc to close";
+
+  const canvas = document.createElement("div");
+  canvas.className = "mermaid-fullscreen-canvas";
+
+  const stage = document.createElement("div");
+  stage.className = "mermaid-fullscreen-stage";
+  const clonedSvg = sourceSvg.cloneNode(true) as SVGElement;
+  clonedSvg.removeAttribute("style");
+  stage.appendChild(clonedSvg);
+
+  canvas.append(stage);
+  overlay.append(toolbar, canvas, hint);
+  document.body.appendChild(overlay);
+
+  const prevBodyOverflow = document.body.style.overflow;
+  document.body.style.overflow = "hidden";
+
+  let scale = 1;
+  let tx = 0;
+  let ty = 0;
+
+  const apply = () => {
+    stage.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+  };
+
+  const fit = () => {
+    stage.style.transform = "translate(0px, 0px) scale(1)";
+    const stageRect = stage.getBoundingClientRect();
+    const canvasRect = canvas.getBoundingClientRect();
+    if (!stageRect.width || !stageRect.height) {
+      apply();
+      return;
+    }
+    const padding = 96;
+    const sx = (canvasRect.width - padding) / stageRect.width;
+    const sy = (canvasRect.height - padding) / stageRect.height;
+    scale = Math.max(0.1, Math.min(sx, sy, 6));
+    tx = (canvasRect.width - stageRect.width * scale) / 2;
+    ty = (canvasRect.height - stageRect.height * scale) / 2;
+    apply();
+  };
+
+  const zoomAt = (factor: number, cx: number, cy: number) => {
+    const newScale = Math.max(0.1, Math.min(12, scale * factor));
+    const k = newScale / scale;
+    tx = cx - k * (cx - tx);
+    ty = cy - k * (cy - ty);
+    scale = newScale;
+    apply();
+  };
+
+  const onWheel = (e: WheelEvent) => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const factor = Math.exp(-e.deltaY * 0.0015);
+    zoomAt(factor, e.clientX - rect.left, e.clientY - rect.top);
+  };
+  canvas.addEventListener("wheel", onWheel, { passive: false });
+
+  let dragging = false;
+  let dragX = 0;
+  let dragY = 0;
+  let dragTx = 0;
+  let dragTy = 0;
+  let dragId = -1;
+  canvas.addEventListener("pointerdown", (e) => {
+    dragging = true;
+    dragId = e.pointerId;
+    canvas.setPointerCapture(dragId);
+    canvas.classList.add("dragging");
+    dragX = e.clientX;
+    dragY = e.clientY;
+    dragTx = tx;
+    dragTy = ty;
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    tx = dragTx + (e.clientX - dragX);
+    ty = dragTy + (e.clientY - dragY);
+    apply();
+  });
+  const endDrag = () => {
+    if (!dragging) return;
+    dragging = false;
+    canvas.classList.remove("dragging");
+    if (dragId !== -1) {
+      try {
+        canvas.releasePointerCapture(dragId);
+      } catch {
+        /* pointer already released */
+      }
+    }
+    dragId = -1;
+  };
+  canvas.addEventListener("pointerup", endDrag);
+  canvas.addEventListener("pointercancel", endDrag);
+
+  const centerZoom = (factor: number) => {
+    const r = canvas.getBoundingClientRect();
+    zoomAt(factor, r.width / 2, r.height / 2);
+  };
+  zoomInBtn.addEventListener("click", () => centerZoom(1.25));
+  zoomOutBtn.addEventListener("click", () => centerZoom(1 / 1.25));
+  fitBtn.addEventListener("click", fit);
+
+  const close = () => {
+    canvas.removeEventListener("wheel", onWheel);
+    document.removeEventListener("keydown", onKey);
+    document.body.style.overflow = prevBodyOverflow;
+    overlay.remove();
+  };
+  closeBtn.addEventListener("click", close);
+
+  function onKey(e: KeyboardEvent) {
+    if (e.key === "Escape") {
+      close();
+    } else if (e.key === "0") {
+      fit();
+    } else if (e.key === "+" || e.key === "=") {
+      centerZoom(1.25);
+    } else if (e.key === "-" || e.key === "_") {
+      centerZoom(1 / 1.25);
+    }
+  }
+  document.addEventListener("keydown", onKey);
+
+  requestAnimationFrame(fit);
+}
+
 export default function KbProse({ html, className }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -183,10 +340,22 @@ export default function KbProse({ html, className }: Props) {
         });
         figure.appendChild(copyBtn);
 
+        const expandBtn = document.createElement("button");
+        expandBtn.type = "button";
+        expandBtn.className = "mermaid-expand";
+        expandBtn.textContent = "expand";
+        expandBtn.title = "Open fullscreen (drag to pan, scroll to zoom)";
+        figure.appendChild(expandBtn);
+
         const svgWrap = document.createElement("div");
         svgWrap.className = "mermaid-svg";
         svgWrap.innerHTML = svg;
         figure.appendChild(svgWrap);
+
+        expandBtn.addEventListener("click", () => {
+          const svgEl = svgWrap.querySelector("svg");
+          if (svgEl) openMermaidFullscreen(svgEl);
+        });
 
         pre.replaceWith(figure);
       }
