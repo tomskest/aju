@@ -111,6 +111,84 @@ async function loadMermaid(): Promise<typeof import("mermaid").default> {
   return mermaidLoadPromise;
 }
 
+function parseColorToRgb(input: string): [number, number, number] | null {
+  const s = input.trim().toLowerCase();
+  if (!s || s === "none" || s === "transparent" || s.startsWith("url(")) {
+    return null;
+  }
+  if (s.startsWith("#")) {
+    const hex = s.slice(1);
+    if (hex.length === 3) {
+      const r = parseInt(hex[0] + hex[0], 16);
+      const g = parseInt(hex[1] + hex[1], 16);
+      const b = parseInt(hex[2] + hex[2], 16);
+      return [r, g, b];
+    }
+    if (hex.length === 6 || hex.length === 8) {
+      const r = parseInt(hex.slice(0, 2), 16);
+      const g = parseInt(hex.slice(2, 4), 16);
+      const b = parseInt(hex.slice(4, 6), 16);
+      if (Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b)) return null;
+      return [r, g, b];
+    }
+    return null;
+  }
+  const m = s.match(/rgba?\(\s*([0-9.]+)[\s,]+([0-9.]+)[\s,]+([0-9.]+)/);
+  if (m) {
+    return [Number(m[1]), Number(m[2]), Number(m[3])];
+  }
+  return null;
+}
+
+function relativeLuminance(rgb: [number, number, number]): number {
+  const [r, g, b] = rgb.map((v) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function fillIsLight(el: Element): boolean | null {
+  const attr = el.getAttribute("fill");
+  let raw: string | null = attr;
+  if (!raw || raw === "none") {
+    const styleFill = (el as SVGElement).style?.fill;
+    if (styleFill) raw = styleFill;
+  }
+  if (!raw && typeof window !== "undefined") {
+    raw = window.getComputedStyle(el).fill;
+  }
+  if (!raw) return null;
+  const rgb = parseColorToRgb(raw);
+  if (!rgb) return null;
+  return relativeLuminance(rgb) > 0.55;
+}
+
+function fixSvgContrast(svg: SVGElement) {
+  const groups = svg.querySelectorAll<SVGGElement>(
+    "g.node, g.cluster, g.actor, g.task, g.section",
+  );
+  groups.forEach((g) => {
+    const shape = g.querySelector(
+      "rect, polygon, circle, ellipse, path",
+    ) as Element | null;
+    if (!shape) return;
+    const light = fillIsLight(shape);
+    if (light !== true) return;
+
+    const dark = "#0e0f12";
+    g.querySelectorAll<SVGTextElement>("text, tspan").forEach((t) => {
+      t.setAttribute("fill", dark);
+      t.style.fill = dark;
+    });
+    g.querySelectorAll<HTMLElement>(
+      "foreignObject *, .nodeLabel, .label, .edgeLabel",
+    ).forEach((el) => {
+      el.style.color = dark;
+    });
+  });
+}
+
 function openMermaidFullscreen(sourceSvg: SVGElement) {
   const overlay = document.createElement("div");
   overlay.className = "mermaid-fullscreen";
@@ -351,6 +429,9 @@ export default function KbProse({ html, className }: Props) {
         svgWrap.className = "mermaid-svg";
         svgWrap.innerHTML = svg;
         figure.appendChild(svgWrap);
+
+        const renderedSvg = svgWrap.querySelector("svg");
+        if (renderedSvg) fixSvgContrast(renderedSvg);
 
         expandBtn.addEventListener("click", () => {
           const svgEl = svgWrap.querySelector("svg");
