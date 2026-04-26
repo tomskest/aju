@@ -14,7 +14,7 @@ aju has three deployable units. They do not share a runtime.
 
 The app talks to a single **Neon project** (`aju.sh`, id `shiny-union-36888903`, region `aws-eu-central-1`) that hosts one control database (`aju_control`) plus one tenant database per organization (`org_<cuid>`). See [tech-stack.md](./tech-stack.md) for the split-client setup.
 
-There is also a **local MCP stdio server** (`mcp/aju-server.ts`) that runs as a subprocess of the user's MCP client. It is not deployed anywhere — it ships with the web app's source and the CLI invokes it via `npm run mcp:aju`.
+There is also a **local MCP stdio server** (`client/mcp/aju-server.ts`) that runs as a subprocess of the user's MCP client. It is not deployed anywhere — it ships with the web app's source. The remote `/api/mcp` endpoint is the preferred path; the stdio bridge is retained for legacy clients.
 
 ## The web app
 
@@ -24,16 +24,16 @@ Single Node.js process per instance, started by `npm start`:
 
 ```json
 // package.json
-"start": "prisma db push --schema data/control/schema.prisma --accept-data-loss --skip-generate && tsx scripts/tenant-migrate.ts && next start"
+"start": "prisma migrate deploy --schema data/control/schema.prisma && tsx scripts/tenant-migrate.ts && next start"
 ```
 
 The startup chain does two things before `next start`:
 
-1. **`prisma db push --schema data/control/schema.prisma --accept-data-loss --skip-generate`** — syncs the control schema to `aju_control`. `--accept-data-loss` is on because the app owns the schema end-to-end; we don't preserve Prisma's migration history. The Prisma clients were generated at build time by `npm run build`, so `--skip-generate` keeps boot fast.
-2. **`tsx scripts/tenant-migrate.ts`** — enumerates every `tenant.status='active'` row, acquires a per-DB advisory lock, runs `prisma db push --schema data/tenant/schema.prisma` against each tenant's direct DSN, re-applies `vector-setup.sql`, `fts-setup/*.sql`, and `rls-policies.sql`, then bumps the tenant's `schema_version`. Every statement is idempotent.
+1. **`prisma migrate deploy --schema data/control/schema.prisma`** — applies any pending control-plane migrations to `aju_control` from the numbered migration files under `data/control/migrations/`. The Prisma clients were generated at build time by `npm run build`. Migration history is committed to the repo and is the only path schema changes take to production — there is no `db push --accept-data-loss` shortcut on the boot path.
+2. **`tsx scripts/tenant-migrate.ts`** — enumerates every `tenant.status='active'` row, acquires a per-DB advisory lock, applies pending tenant migrations against each tenant's direct DSN, re-applies `vector-setup.sql`, `fts-setup/*.sql`, and `rls-policies.sql`, then bumps the tenant's `schema_version`. Every statement is idempotent.
 3. **`next start`** — serves the app.
 
-**Why this sequence runs on every boot.** Railway redeploys create fresh containers; baking the control-schema sync and per-tenant migrate into `start` means an instance is never serving traffic against a stale schema. A tenant whose recorded `schema_version` is behind the code-side `CURRENT_TENANT_SCHEMA_VERSION` gets flagged via `TenantSchemaDriftError` in `tenantDbFor`, so a failed per-tenant migrate surfaces at request time rather than silently rotting.
+**Why this sequence runs on every boot.** Railway redeploys create fresh containers; baking the control-schema migrate and per-tenant migrate into `start` means an instance is never serving traffic against a stale schema. A tenant whose recorded `schema_version` is behind the code-side `CURRENT_TENANT_SCHEMA_VERSION` gets flagged via `TenantSchemaDriftError` in `tenantDbFor`, so a failed per-tenant migrate surfaces at request time rather than silently rotting.
 
 ### Routes
 
@@ -55,7 +55,7 @@ The HTTP surface lives entirely under `src/app/api/`. The main groups:
 
 ### Scheduled jobs
 
-Cron endpoints are authenticated HTTP POSTs. They do not poll; something external has to hit them. On Railway that "something" is the platform's scheduled trigger feature. **TODO: verify** the exact Railway trigger config (cron string + target URL).
+Cron endpoints are authenticated HTTP POSTs gated by `CRON_SECRET` (timing-safe comparison in the route handler). They do not poll; something external has to hit them. On Railway that "something" is the platform's scheduled trigger feature, which is configured to POST to each route with the secret in the `Authorization` header.
 
 The two jobs:
 
@@ -111,7 +111,7 @@ npm script aliases in `package.json`:
 "backfill:embeddings": "npx tsx scripts/backfill-embeddings.ts"
 ```
 
-**Why tsx, not compiled JS.** These scripts run rarely and need to import straight from `src/lib/*.ts` (the embeddings backfill reuses `generateEmbeddings` from `src/lib/embeddings.ts`; `tenant-migrate.ts` reuses `decryptDsn` and `CURRENT_TENANT_SCHEMA_VERSION`). Compiling them would fork the build graph. `tsx` runs TypeScript directly at operator-acceptable speed.
+**Why tsx, not compiled JS.** These scripts run rarely and need to import straight from `src/lib/*.ts` (the embeddings backfill reuses `generateEmbeddings` from `src/lib/embeddings/embeddings.ts`; `tenant-migrate.ts` reuses `decryptDsn` and `CURRENT_TENANT_SCHEMA_VERSION`). Compiling them would fork the build graph. `tsx` runs TypeScript directly at operator-acceptable speed.
 
 ## Per-tenant provisioning and teardown
 
@@ -133,6 +133,6 @@ Source: `client/cli/`. Not covered in depth here — see the dedicated CLI secti
 
 ## The local MCP stdio server
 
-`mcp/aju-server.ts`. Runs as a subprocess of an MCP client (Claude Desktop, Cursor). Authenticates the same way the CLI does — with an `aju_live_*` bearer token — and proxies MCP tool calls to the hosted HTTP API.
+`client/mcp/aju-server.ts`. Runs as a subprocess of an MCP client (Claude Desktop, Cursor). Authenticates the same way the CLI does — with an `aju_live_*` bearer token — and proxies MCP tool calls to the hosted HTTP API.
 
 The remote MCP endpoint is the preferred path for clients that support Streamable HTTP. Production URL: `https://mcp.aju.sh/mcp` (configurable via `NEXT_PUBLIC_MCP_URL`). The stdio server exists because some clients still only speak the original stdio transport.

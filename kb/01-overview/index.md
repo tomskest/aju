@@ -27,9 +27,10 @@ aju/
 ├── src/
 │   ├── app/              # Next.js 15 App Router — routes, pages, API handlers
 │   │   └── api/          # HTTP API (vault CRUD, search, auth, MCP, cron)
-│   ├── components/       # React UI for the dashboard
-│   └── lib/              # Shared infra: db, auth, embeddings, s3, tenant, ...
-├── prisma/
+│   ├── components/       # React UI: app shell, brain editor, landing, OAuth
+│   └── lib/              # Domain folders: auth/, tenant/, vault/, embeddings/,
+│                         #   storage/, billing/, mcp/, audit/, validators/
+├── data/
 │   ├── control/
 │   │   └── schema.prisma # Control-plane schema → @prisma/client
 │   └── tenant/
@@ -38,12 +39,16 @@ aju/
 │       ├── vector-setup.sql
 │       └── rls-policies.sql # Brain-id RLS, applied inside each tenant DB
 ├── scripts/              # tenant-migrate, provision-existing-orgs, backfill-*
-├── workers/
+├── client/
+│   ├── cli/              # Go CLI (`aju`) — talks to the HTTP API
+│   ├── mcp/
+│   │   └── aju-server.ts # Local MCP stdio server (legacy; remote /api/mcp preferred)
+│   └── openapi/          # OpenAPI YAML + auto-generated SDKs (ts, py, go, sh)
+├── worker/
 │   └── install/          # Cloudflare Worker for install.aju.sh
-├── apps/
-│   └── cli/              # Go CLI (`aju`) that talks to the HTTP API
-├── mcp/
-│   └── aju-server.ts     # Local MCP stdio server
+├── kb/                   # This public knowledge base (rendered at aju.sh/kb)
+├── doc/                  # Internal runbooks (Neon migration, Prisma, backups)
+├── benchmark/            # LongMemEval benchmark harness
 ├── docker-compose.yml    # Dev-only pgvector/pg17 container
 └── package.json
 ```

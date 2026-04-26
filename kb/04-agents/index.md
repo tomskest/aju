@@ -80,8 +80,11 @@ for what's left of it.
 6. [clients.md](./clients.md) — Per-host config JSON shapes — Claude
    Desktop vs Claude.ai vs Cursor vs OpenCode — and why each differs.
 7. [stdio-bridge.md](./stdio-bridge.md) — The retired stdio transport in
-   `mcp/aju-server.ts`, what it did, and the one-in-a-million case it's
-   still useful for.
+   `client/mcp/aju-server.ts`, what it did, and the one-in-a-million case
+   it's still useful for.
+8. [sdks.md](./sdks.md) — TypeScript, Python, Go, and shell clients
+   auto-generated from the OpenAPI spec. **Preview / in progress** —
+   none of them are published to a registry yet.
 
 ## Reading order
 

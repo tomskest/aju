@@ -53,14 +53,17 @@ tenant DB — the connection string doesn't grant access. See
 
 Postgres is the ground truth. Nothing structured exists outside it.
 
-## What R2 stores
+## What object storage sees
 
 **Only** the raw bytes of uploaded files, under keys shaped like
-`<brainName>/files/<category>/<filename>`. The S3 client lives at
-`src/lib/s3.ts`. Access is via presigned URLs (1h expiry by default) or
-the server's AWS credentials for internal operations.
+`<brainName>/files/<category>/<filename>`. Production uses **Tigris**
+(Railway-managed, S3-compatible) with a separate bucket per org and
+scoped access keys decrypted from the `Tenant` row at request time. The
+storage client lives at `src/lib/tenant/storage.ts`. Access is via
+presigned URLs (1h expiry by default) or the server's per-tenant
+credentials for internal operations.
 
-R2 does not see:
+The bucket does not see:
 
 - Your markdown documents — those live in Postgres, never in object
   storage.
@@ -68,12 +71,12 @@ R2 does not see:
   extracted text, and the mime type are stored in `vault_files`, not as
   S3 object metadata.
 
-Encryption at rest is R2's responsibility (and is enabled by default for
-all R2 buckets).
+Encryption at rest is the storage provider's responsibility (Tigris
+enables it by default for all buckets).
 
 ## What the embedding provider sees
 
-`src/lib/embeddings.ts`. aju sends text to **Voyage AI** to produce
+`src/lib/embeddings/embeddings.ts`. aju sends text to **Voyage AI** to produce
 retrieval embeddings.
 
 - Provider: `voyageai` (`EMBEDDING_PROVIDER` constant).
@@ -84,7 +87,7 @@ retrieval embeddings.
 ### What gets sent
 
 For **documents** (`prepareDocumentText`,
-`src/lib/embeddings.ts:28`):
+`src/lib/embeddings/embeddings.ts:28`):
 
 ```
 <title>
@@ -97,7 +100,7 @@ For **documents** (`prepareDocumentText`,
 The YAML frontmatter block is removed before sending, because frontmatter
 is metadata that shouldn't influence semantic ranking.
 
-For **files** (`prepareFileText`, `src/lib/embeddings.ts:41`):
+For **files** (`prepareFileText`, `src/lib/embeddings/embeddings.ts:41`):
 
 ```
 <filename>
@@ -114,18 +117,18 @@ binaries) are never sent to Voyage at all.
 ### Truncation
 
 Voyage's context is 32K tokens; aju truncates input at 96,000 characters
-(`MAX_CHARS`, `src/lib/embeddings.ts:15`) as a ~4 chars/token safe margin.
+(`MAX_CHARS`, `src/lib/embeddings/embeddings.ts:15`) as a ~4 chars/token safe margin.
 Long documents are silently truncated at the tail.
 
 ### Input-type hint
 
 `input_type` is set to `"document"` for stored content and `"query"` for
 semantic-search queries. Using the right one measurably improves retrieval
-quality per Voyage's docs (`src/lib/embeddings.ts:20`).
+quality per Voyage's docs (`src/lib/embeddings/embeddings.ts:20`).
 
 ### Why Voyage
 
-Per the top-of-file comment (`src/lib/embeddings.ts:1`):
+Per the top-of-file comment (`src/lib/embeddings/embeddings.ts:1`):
 
 > Chosen over OpenAI text-embedding-3-small for retrieval quality on
 > developer/agent-memory corpora. voyage-4-large is Voyage's flagship

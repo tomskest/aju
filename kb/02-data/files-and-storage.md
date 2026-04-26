@@ -1,14 +1,15 @@
 ---
-title: Files and R2
+title: Files and storage
 description: Binary uploads, presigned URLs, text extraction, and categories.
 order: 50
 ---
 
-# Files and R2
+# Files and storage
 
 Binary attachments (PDFs, images, arbitrary blobs) live in object storage —
-R2 in production, any S3-compatible endpoint locally. The database only
-stores **metadata** and, where possible, extracted plain text for search.
+**Tigris** in production (Railway-managed, S3-compatible), any other
+S3-compatible endpoint when self-hosting. The database only stores
+**metadata** and, where possible, extracted plain text for search.
 
 Two tables matter, both in the tenant DB:
 
@@ -16,26 +17,49 @@ Two tables matter, both in the tenant DB:
 - `VaultChangeLog` — every upload / delete is logged
   (`operation = "file-upload" | "file-delete"`).
 
-## The S3 client
+## The storage client — one handle per tenant
 
-`src/lib/s3.ts` wraps `@aws-sdk/client-s3`. It uses the standard AWS env
-vars with one addition — `AWS_ENDPOINT_URL` — so the same code hits R2
-(`https://<accountid>.r2.cloudflarestorage.com`), a local MinIO, or real
-S3 without branching.
+`src/lib/tenant/storage.ts` mirrors the `tenantDbFor(orgId)` pattern: every
+read or write for a tenant goes through a handle scoped to that tenant's
+bucket and credentials. The runtime never holds an admin-power key — only
+per-tenant scoped keys, decrypted on demand from the `Tenant` row.
 
-Exports:
+```ts
+import { storageFor } from "@/lib/tenant/storage";
 
-- `uploadToS3(key, buffer, contentType)` — direct Put for small server-side
-  uploads.
-- `getFromS3(key)` — read bytes back (used for text extraction on confirm).
-- `deleteFromS3(key)` — remove the object.
-- `getPresignedUrl(key, expiresIn=3600)` — GET presign for client download.
-- `getPresignedUploadUrl(key, contentType, expiresIn=3600)` — PUT presign
-  for client upload.
+const storage = await storageFor(orgId);
+await storage.put(key, buffer, contentType);
+const url = await storage.presignPut(key, contentType, 3600);
+```
 
-**Why `AWS_ENDPOINT_URL`:** R2's API is S3-compatible but not at the
-`amazonaws.com` domain. Making the endpoint configurable means production,
-dev, and test all run the same client code.
+`TenantStorage` exposes:
+
+- `put(key, body, contentType)` — direct Put for small server-side uploads.
+- `get(key)` — read bytes back (used for text extraction on confirm).
+- `delete(key)` — remove the object.
+- `deleteMany(keys)` — batch delete (capped at 1000 keys per call by S3).
+- `presignGet(key, expiresIn=3600)` — GET presign for client download.
+- `presignPut(key, contentType, expiresIn=3600)` — PUT presign for client
+  upload.
+
+Under the hood it's `@aws-sdk/client-s3` with a configurable endpoint —
+default `https://t3.storage.dev` (Tigris), region `auto`. The same code
+hits Tigris (Railway), Cloudflare R2, AWS S3, Backblaze B2, or a local
+MinIO without branching; only the endpoint and credentials change.
+
+### Per-tenant credential isolation
+
+Each tenant row carries its own bucket name plus encrypted access key.
+Keys are encrypted at rest with `STORAGE_CRED_ENC_KEY` (AES-GCM) and
+decrypted in `src/lib/storage/` (`decryptStorageSecret`). Buckets are
+provisioned out-of-band by `scripts/provision-tigris-bucket.ts`
+(operator-run; shells out to the `tigris` CLI).
+
+**Transitional fallback:** if a tenant row has no `storageBucket` yet, the
+handle falls back to the shared `AWS_S3_BUCKET_NAME` + `AWS_ACCESS_KEY_ID` /
+`AWS_SECRET_ACCESS_KEY` env vars. Once every active tenant has been
+backfilled, the fallback branch and the shared env vars go away and the
+per-tenant storage columns become required.
 
 ## Key layout
 
@@ -44,13 +68,13 @@ dev, and test all run the same client code.
 (`src/app/api/vault/files/presign-upload/route.ts`,
 `src/app/api/vault/files/upload/route.ts`).
 
-`s3Key` is unique within the tenant DB (`VaultFile.s3Key @unique`). The R2
-bucket is shared across orgs — uniqueness is a per-tenant property, and
-brain names are uniquely scoped within one tenant DB. If you self-host and
-run multiple orgs against the same bucket, prefix the bucket per-org (or
-use one bucket per org) if a bigger blast-radius separation matters to you.
+`s3Key` is unique within the tenant DB (`VaultFile.s3Key @unique`). In
+production each org has its own bucket, so the brain-prefixed key is the
+human-readable layer on top of bucket-level isolation. Self-hosters who
+run multiple orgs against a shared bucket should add an org prefix or move
+to one bucket per org if a bigger blast-radius separation matters.
 
-**Why encode the brain name in the key:** browsing the R2 bucket with any
+**Why encode the brain name in the key:** browsing the bucket with any
 generic S3 tool produces a human-readable tree. The downside is that
 renaming a brain strands its files under the old prefix — an acceptable
 tradeoff given renames are rare.
@@ -64,25 +88,25 @@ file and posts the bytes through the Next.js server. The server:
 
 1. Resolves the target brain, enforces `canWrite`.
 2. Checks for duplicate `s3Key` (409 on collision).
-3. Decodes the base64, PUTs to S3.
-4. Attempts text extraction (`src/lib/extract-text.ts` — PDFs via
+3. Decodes the base64, PUTs to object storage.
+4. Attempts text extraction (`src/lib/storage/extract-text.ts` — PDFs via
    `pdf-parse`, any `text/*` mime as UTF-8). Failures are **non-fatal**.
 5. Creates the `VaultFile` row and a changelog entry in a transaction.
 6. Fires off an embedding update if text was extracted.
 
 Suited to small files where the round-trip through the app server is fine.
 
-### Presigned upload: POST `/api/vault/files/presign-upload` → PUT to R2 → POST `/api/vault/files/confirm-upload`
+### Presigned upload: POST `/api/vault/files/presign-upload` → PUT to storage → POST `/api/vault/files/confirm-upload`
 
 1. `presign-upload` (`src/app/api/vault/files/presign-upload/route.ts`) —
    the client asks the server for a time-limited PUT URL (default 1h
    expiry). The server returns `{ uploadUrl, s3Key, contentType, method,
    headers }`.
-2. Client PUTs the bytes directly to R2. Nothing transits the Next.js
-   server.
+2. Client PUTs the bytes directly to object storage. Nothing transits the
+   Next.js server.
 3. `confirm-upload` (`src/app/api/vault/files/confirm-upload/route.ts`) —
    client tells the server "I uploaded to this key". The server reads the
-   object back from R2 to compute `sizeBytes` and extract text, then
+   object back from storage to compute `sizeBytes` and extract text, then
    creates the `VaultFile` row.
 
 **Why two paths:** large files (hundreds of MB, PDFs, presentations)
@@ -100,8 +124,8 @@ All three upload paths enforce a hard cap of **25 MB per file**
 - `POST /api/vault/files/presign-upload` — rejects before issuing the
   presigned PUT URL, based on the declared `sizeBytes`.
 - `POST /api/vault/files/confirm-upload` — re-checks the actual object
-  size after the client has uploaded to R2. If the object is oversized,
-  the server deletes it from R2 before returning the error.
+  size after the client has uploaded. If the object is oversized, the
+  server deletes it before returning the error.
 
 On reject, the response is HTTP **413 Payload Too Large** with:
 
@@ -111,10 +135,10 @@ On reject, the response is HTTP **413 Payload Too Large** with:
 
 **Why re-check at confirm:** the presign step only knows what the client
 *claimed* the size would be. A client can lie and then PUT a larger
-object directly to R2. The confirm handler is the authoritative check —
-it HEADs the uploaded object, and if it exceeds `MAX_UPLOAD_BYTES` it
-deletes the object from R2 and returns 413. No orphaned oversized
-objects remain in the bucket.
+object directly to the bucket. The confirm handler is the authoritative
+check — it HEADs the uploaded object, and if it exceeds `MAX_UPLOAD_BYTES`
+it deletes the object and returns 413. No orphaned oversized objects
+remain in the bucket.
 
 ## Reading files
 
@@ -141,15 +165,15 @@ returns every file in the current brain, filterable by `category` or
 1. Resolve brain, enforce `canWrite`.
 2. Find the `VaultFile` by `(s3Key, brainId)`.
 3. **Log first** — insert a changelog row with `operation="file-delete"`.
-4. `deleteFromS3(key)` then `VaultFile.delete`.
+4. `storage.delete(key)` then `VaultFile.delete`.
 
-Order matters: logging first means the audit trail survives even if the S3
-delete fails halfway. The DB row is deleted last so a replayable state
-exists if S3 errors mid-operation.
+Order matters: logging first means the audit trail survives even if the
+storage delete fails halfway. The DB row is deleted last so a replayable
+state exists if the storage call errors mid-operation.
 
 ## Text extraction
 
-`src/lib/extract-text.ts`:
+`src/lib/storage/extract-text.ts`:
 
 - `application/pdf` → `pdf-parse`, returns the plain-text body.
 - `text/*` → UTF-8 decode of the buffer.
@@ -176,6 +200,6 @@ its SHA-256 `textHash` enables cheap dedup checks.
 ## Categories and tags
 
 `VaultFile.category` is a free-form string (e.g. `annual-reports`,
-`slides`, `receipts`) used to organise both the R2 prefix and the filter
-surface in the list endpoint. `tags` is a `String[]` for cross-cutting
-classification. Neither has a controlled vocabulary.
+`slides`, `receipts`) used to organise both the storage prefix and the
+filter surface in the list endpoint. `tags` is a `String[]` for
+cross-cutting classification. Neither has a controlled vocabulary.

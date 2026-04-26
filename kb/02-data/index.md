@@ -19,8 +19,9 @@ The shape is deliberately small:
   **tenant DB** per organization (`org_<cuid>`) for brains, markdown documents
   (including their full body text), the wikilink graph, change log, and file
   *metadata*.
-- **R2 / S3** holds *only* the binary contents of uploaded files. Nothing
-  queryable lives there.
+- **Object storage** (Tigris in production, any S3-compatible endpoint
+  for self-hosters) holds *only* the binary contents of uploaded files.
+  Nothing queryable lives there.
 - **Voyage AI** receives document and file text for embedding, nothing else.
 
 Tenant isolation runs at two layers: **the database boundary** (each org gets
@@ -38,8 +39,8 @@ RLS still blocks reads across brains the caller doesn't have access to.
    org brains.
 3. [documents-and-versioning.md](./documents-and-versioning.md) — Markdown +
    frontmatter storage, path semantics, wikilink parsing, the change log.
-4. [files-and-r2.md](./files-and-r2.md) — Binary uploads, presigned URLs, text
-   extraction, categories.
+4. [files-and-storage.md](./files-and-storage.md) — Binary uploads, presigned
+   URLs, text extraction, categories.
 5. [tenant-isolation.md](./tenant-isolation.md) — Organizations, RLS, and how
    rows stay scoped to a tenant.
 6. [export-and-deletion.md](./export-and-deletion.md) — Signout, brain delete,

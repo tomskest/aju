@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
+import KbProse from "@/components/kb/KbProse";
 
 type DocSummary = {
   id: string;
@@ -250,7 +251,7 @@ export default function BrainExplorer({
       {/* Main pane */}
       <main className="flex-1 overflow-y-auto bg-[var(--color-bg)]">
         {currentDoc ? (
-          <article className="mx-auto max-w-[760px] px-6 py-10 md:px-10">
+          <article className="max-w-[960px] px-6 py-10 md:px-12">
             <header className="mb-8 border-b border-white/5 pb-6">
               <p className="font-mono text-[11px] text-[var(--color-faint)]">
                 {currentDoc.path}
@@ -327,10 +328,7 @@ export default function BrainExplorer({
                 className="min-h-[60vh] w-full resize-y rounded-md border border-white/10 bg-[var(--color-panel)] p-4 font-mono text-[13px] leading-relaxed text-[var(--color-ink)] focus:border-[var(--color-accent)]/40 focus:outline-none"
               />
             ) : (
-              <div
-                className="kb-prose"
-                dangerouslySetInnerHTML={{ __html: currentDoc.rendered }}
-              />
+              <KbProse html={currentDoc.rendered} />
             )}
           </article>
         ) : missingHint ? (

@@ -170,7 +170,7 @@ or cascade-wipe history.
 ### `VaultFile` (`data/tenant/schema.prisma`)
 
 Metadata for every binary uploaded to the vault. The bytes themselves live
-in R2/S3 under `s3Key` (see [files-and-r2.md](./files-and-r2.md)). The
+in object storage under `s3Key` (see [files-and-storage.md](./files-and-storage.md)). The
 database stores the filename, mime type, size, category, tags, the extracted
 plain-text for text/PDF files, and the SHA-256 `textHash` for dedup.
 `uploadedBy` is a denormalized string (no FK — the User lives in control).

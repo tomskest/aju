@@ -82,9 +82,9 @@ export async function tenantDbFor(orgId: string): Promise<PrismaClientTenant> { 
 
 `@aws-sdk/client-s3: ^3.992.0`, `@aws-sdk/s3-request-presigner: ^3.992.0`.
 
-The client in `src/lib/s3.ts:13-22` is configured purely from env vars (`AWS_ENDPOINT_URL`, `AWS_DEFAULT_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_BUCKET_NAME`). That means any S3-compatible provider works: Cloudflare R2, Backblaze B2, MinIO, AWS proper.
+The client lives in `src/lib/tenant/storage.ts` and exposes `storageFor(orgId)` — a per-tenant handle pinned to that org's bucket and credentials, mirroring `tenantDbFor(orgId)`. In production each org has its own bucket; the runtime decrypts a scoped access key from the `Tenant` row on demand. The shared `AWS_*` env vars (`AWS_ENDPOINT_URL`, `AWS_DEFAULT_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_BUCKET_NAME`) are a transitional fallback for tenants that haven't been provisioned with per-org credentials yet, and are also what self-hosters use for a single shared bucket. Any S3-compatible provider works: Tigris, Cloudflare R2, Backblaze B2, MinIO, AWS proper.
 
-**Why AWS SDK with a custom endpoint.** One codepath, every provider. Production on Railway uses the managed Bucket add-on (S3-compatible); self-hosters can point at R2 for zero egress cost or MinIO for fully local dev.
+**Why AWS SDK with a custom endpoint.** One codepath, every provider. Production on Railway uses **Tigris** (Railway-managed, S3-compatible) with per-org buckets and scoped credentials encrypted at rest in the `Tenant` row. Self-hosters can point at R2 for zero egress cost, MinIO for fully local dev, or AWS S3 directly.
 
 **What is in S3.** Binary files uploaded as `VaultFile` rows. The S3 key is stored on the row, plus a cached `extractedText` (PDF text extraction via `pdf-parse`) for search.
 
@@ -112,22 +112,20 @@ Bearer tokens on `Authorization: Bearer aju_live_…`. Stored as `prefix` (first
 
 ### Voyage AI (embeddings)
 
-`src/lib/embeddings.ts:12-120`. Model is `voyage-4-large`, 1024-dim, 32K-token context.
+`src/lib/embeddings/embeddings.ts`. Model is `voyage-4-large`, 1024-dim, 32K-token context.
 
 ```ts
 const VOYAGE_API = "https://api.voyageai.com/v1/embeddings";
 const MODEL = "voyage-4-large";
 ```
 
-**Why Voyage.** The comment at the top of `embeddings.ts` is explicit: Voyage measured better on retrieval quality for developer/agent-memory corpora. A planned BYOK layer is noted at `embeddings.ts:7` for callers who want to swap providers later.
+**Why Voyage.** The comment at the top of `embeddings.ts` is explicit: Voyage measured better on retrieval quality for developer/agent-memory corpora. A planned BYOK layer is noted in the same file for callers who want to swap providers later.
 
 **Tradeoff.** Voyage has a smaller partner ecosystem than the OpenAI/Cohere incumbents. The 1024-dim vectors are compact relative to the 1536-dim alternatives, which keeps HNSW index footprint small.
 
 ### Anthropic SDK
 
-`@anthropic-ai/sdk: ^0.77.0`. Present in dependencies but the primary read-path doesn't call Anthropic directly — it is available for future agent-facing features (summaries, rewrites).
-
-**TODO: verify** where the Anthropic SDK is invoked at runtime. It is listed in `package.json:20` but no direct usage was located during this pass.
+`@anthropic-ai/sdk: ^0.77.0`. Used **only** in the LongMemEval benchmark harness under `benchmark/longmemeval/` (Sonnet 4.6 as answerer, Haiku 4.5 as judge) for measuring retrieval quality against the public benchmark. The main app runtime does not call Anthropic — embeddings go to Voyage, not Claude.
 
 ## MCP
 
@@ -136,7 +134,7 @@ const MODEL = "voyage-4-large";
 `@modelcontextprotocol/sdk: ^1`. Two transports:
 
 - **Remote (Streamable HTTP):** `src/app/api/mcp/route.ts` wires `WebStandardStreamableHTTPServerTransport` into a Next.js route handler. Every request builds a fresh `McpServer` bound to the authenticated user; the spec permits stateless mode and Claude-family clients accept it.
-- **Local (stdio):** `mcp/aju-server.ts` runs as a separate Node process that talks to the hosted API over HTTP. Intended for clients that can't authenticate to a remote MCP endpoint.
+- **Local (stdio):** `client/mcp/aju-server.ts` runs as a separate Node process that talks to the hosted API over HTTP. Intended for clients that can't authenticate to a remote MCP endpoint. The remote endpoint is the preferred path; the stdio transport is retained for legacy clients (see [stdio-bridge.md](../04-agents/stdio-bridge.md)).
 
 Tool definitions are shared at `src/lib/mcp/tools.ts` so both transports expose the same surface.
 

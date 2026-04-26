@@ -18,7 +18,7 @@ Source: [`github.com/tomskest/aju`](https://github.com/tomskest/aju), Apache 2.0
 - **An S3-compatible bucket** — AWS S3, Cloudflare R2, Backblaze B2, or MinIO
 - **A Resend account** for transactional email (magic links, invitations)
 - **A Cloudflare Turnstile site key + secret** — or leave `TURNSTILE_SECRET_KEY` unset in dev and it fails open (`src/lib/turnstile.ts`)
-- **A Voyage AI API key** for embeddings (`src/lib/embeddings.ts`)
+- **A Voyage AI API key** for embeddings (`src/lib/embeddings/embeddings.ts`)
 
 ## Environment variables
 
@@ -61,7 +61,7 @@ Tenant plane (per-org DBs provisioned on demand):
 | `AWS_SECRET_ACCESS_KEY` | Bucket read/write secret |
 | `AWS_S3_BUCKET_NAME` | Bucket name |
 
-All five are read in `src/lib/s3.ts:13-30`.
+These provide the **fallback** path used by self-hosters and local dev. In production each tenant has its own bucket + scoped credentials, encrypted on the `Tenant` row and decrypted by `src/lib/tenant/storage.ts` at request time. The shared `AWS_*` vars are only consulted when a tenant has no per-org bucket configured yet.
 
 ### Auth and identity
 
@@ -88,8 +88,8 @@ All five are read in `src/lib/s3.ts:13-30`.
 
 | Var | Purpose |
 |---|---|
-| `VOYAGE_API_KEY` | Voyage AI key for embeddings (`src/lib/embeddings.ts`). Required for semantic search and the embedding backfill. Model is `voyage-4-large`, 1024-dim. |
-| `ANTHROPIC_API_KEY` | The SDK is a dependency but no runtime call site was located. **TODO: verify.** |
+| `VOYAGE_API_KEY` | Voyage AI key for embeddings (`src/lib/embeddings/embeddings.ts`). Required for semantic search and the embedding backfill. Model is `voyage-4-large`, 1024-dim. |
+| `ANTHROPIC_API_KEY` | Optional. Used only by the LongMemEval benchmark harness (`benchmark/longmemeval/`) — Sonnet 4.6 as answerer, Haiku 4.5 as judge. The main app runtime never calls Anthropic. Skip this var unless you plan to run the benchmark. |
 
 ### Legacy single-tenant API keys (optional)
 
@@ -166,10 +166,10 @@ For production-like local dev against real Neon tenant DBs, unset `USE_LOCAL_TEN
 In production, `npm start` does the migration work for you (see [deployment-layout.md](./deployment-layout.md)):
 
 ```json
-"start": "prisma db push --schema data/control/schema.prisma --accept-data-loss --skip-generate && tsx scripts/tenant-migrate.ts && next start"
+"start": "prisma migrate deploy --schema data/control/schema.prisma && tsx scripts/tenant-migrate.ts && next start"
 ```
 
-`scripts/tenant-migrate.ts` walks every active tenant on boot and brings its schema + RLS up to date. RLS policies live in `data/tenant/rls-policies.sql` and are re-applied alongside the schema because all the statements are idempotent (ENABLE RLS is a no-op if already set; policies are dropped + recreated).
+`prisma migrate deploy` applies the numbered migration files under `data/control/migrations/` to `aju_control`. There is no `db push --accept-data-loss` shortcut on the boot path — every schema change goes through a committed migration. `scripts/tenant-migrate.ts` then walks every active tenant on boot and brings its schema + RLS up to date. RLS policies live in `data/tenant/rls-policies.sql` and are re-applied alongside the schema because all the statements are idempotent (ENABLE RLS is a no-op if already set; policies are dropped + recreated).
 
 ## Optional: the install worker
 
