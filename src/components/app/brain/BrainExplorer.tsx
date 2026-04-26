@@ -525,13 +525,13 @@ function TreeRow({
   return (
     <div className="flex flex-col">
       <div
-        className="group flex items-center gap-1.5 rounded-md py-1 pr-2 transition hover:text-[var(--color-muted)]"
+        className="group flex items-center gap-1.5 rounded-md py-1 pr-2 transition hover:bg-white/[0.03]"
         style={{ paddingLeft: 8 + indent }}
       >
         <button
           type="button"
           onClick={() => onToggleFolder(node.path)}
-          className="flex flex-1 items-center gap-1.5 truncate text-left font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--color-faint)] transition hover:text-[var(--color-ink)]"
+          className="flex flex-1 items-center gap-1.5 truncate text-left font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--color-faint)] transition group-hover:text-[var(--color-ink)]"
         >
           <span
             aria-hidden
@@ -549,7 +549,7 @@ function TreeRow({
             type="button"
             onClick={() => onAddInFolder(node.path)}
             title={`New doc in ${node.path}/`}
-            className="hidden text-[var(--color-faint)] transition hover:text-[var(--color-ink)] group-hover:inline"
+            className="opacity-0 transition-opacity text-[var(--color-faint)] group-hover:opacity-100 hover:text-[var(--color-ink)]"
           >
             <span className="font-mono text-[12px] leading-none">+</span>
           </button>
