@@ -1,9 +1,14 @@
-import type { PrismaClient as PrismaClientTenant } from "@prisma/client-tenant";
+import type {
+  PrismaClient as PrismaClientTenant,
+  Prisma as PrismaTenant,
+} from "@prisma/client-tenant";
 import { prisma, evictTenantClient } from "@/lib/db";
 import { destroyTenant } from "@/lib/tenant";
 import { tenantDbFor } from "@/lib/db";
 import { storageFor, evictStorageHandle } from "@/lib/tenant";
 import { destroyTenantStorage } from "@/lib/storage";
+
+type TenantTx = PrismaTenant.TransactionClient;
 
 /**
  * Brain deletion that also wipes the brain's objects from the tenant bucket.
@@ -21,7 +26,13 @@ export type DeleteBrainResult = {
   r2Warnings: string[];
 };
 
-async function wipeBrainObjects(
+/**
+ * Wipe a brain's S3 objects. Exported so callers can run this BEFORE opening
+ * an interactive transaction — see {@link cascadeDeleteBrainRows}. Reads
+ * `vaultFile.s3Key` from the tenant DB, then issues a single bulk S3
+ * `deleteMany`. Safe to call without an outer transaction.
+ */
+export async function wipeBrainObjects(
   tenant: PrismaClientTenant,
   organizationId: string,
   brainId: string,
@@ -58,49 +69,32 @@ async function wipeBrainObjects(
 }
 
 /**
- * Delete a brain and its storage side-effects from a specific tenant DB.
+ * Cascade-delete a brain's child rows and the brain row itself, using a
+ * caller-supplied transaction client.
  *
- * Caller verifies authorization (owner/editor). Schema cascades handle
- * BrainAccess, VaultDocument, VaultFile, DocumentLink, VaultChangeLog rows;
- * we wipe storage first, then drop the Brain row. `organizationId` is
- * required so we resolve the right per-tenant bucket.
+ * The tenant schema only has `onDelete: Cascade` on BrainAccess;
+ * VaultChangeLog, DocumentLink, VaultFile, and VaultDocument reference Brain
+ * without any cascade rule, so a bare `brain.delete` FK-fails against these
+ * child rows. We delete children explicitly inside the caller's transaction
+ * so a partial wipe doesn't leave an undeletable brain with some children
+ * gone — and we do NOT open a nested `$transaction` here, since tenant DBs
+ * run with `connection_limit=1` and a nested interactive transaction would
+ * deadlock against the outer one (P2024).
+ *
+ * Pair this with a prior {@link wipeBrainObjects} call OUTSIDE the
+ * transaction so the S3 wipe doesn't contend for the connection either.
+ * Together they implement what `deleteBrainWithStorage` used to do
+ * end-to-end, but split across two phases that don't fight the pool.
  */
-export async function deleteBrainWithStorage(
-  tenant: PrismaClientTenant,
-  organizationId: string,
+export async function cascadeDeleteBrainRows(
+  tx: TenantTx,
   brainId: string,
-): Promise<DeleteBrainResult> {
-  const { deleted, warnings } = await wipeBrainObjects(
-    tenant,
-    organizationId,
-    brainId,
-  );
-
-  // Explicit cascade. The tenant schema only has `onDelete: Cascade` on
-  // BrainAccess; VaultChangeLog, DocumentLink, VaultFile, and VaultDocument
-  // reference Brain without any cascade rule, so a bare `brain.delete`
-  // FK-fails against these child rows. Wrap in a transaction so a partial
-  // wipe doesn't leave an undeletable brain with only some children gone.
-  //
-  // A brain with hundreds of change-log rows routinely exceeds Prisma's 5s
-  // default interactive-transaction timeout; bump it so cleanup of large
-  // brains (benchmark runs, archived workspaces) doesn't surface as P2028.
-  await tenant.$transaction(
-    async (tx) => {
-      await tx.vaultChangeLog.deleteMany({ where: { brainId } });
-      await tx.documentLink.deleteMany({ where: { brainId } });
-      await tx.vaultFile.deleteMany({ where: { brainId } });
-      await tx.vaultDocument.deleteMany({ where: { brainId } });
-      await tx.brain.delete({ where: { id: brainId } });
-    },
-    { timeout: 120_000, maxWait: 120_000 },
-  );
-
-  return {
-    brainId,
-    r2ObjectsDeleted: deleted,
-    r2Warnings: warnings,
-  };
+): Promise<void> {
+  await tx.vaultChangeLog.deleteMany({ where: { brainId } });
+  await tx.documentLink.deleteMany({ where: { brainId } });
+  await tx.vaultFile.deleteMany({ where: { brainId } });
+  await tx.vaultDocument.deleteMany({ where: { brainId } });
+  await tx.brain.delete({ where: { id: brainId } });
 }
 
 /**

@@ -41,8 +41,11 @@ BRAIN_NAME_MAX = 64
 BRAIN_NAME_RE = re.compile(r"[^a-zA-Z0-9._-]+")
 
 
-def shared_brain_name(run_id: str) -> str:
-    base = BRAIN_NAME_RE.sub("-", f"lme-{run_id}")
+def per_question_brain_name(run_id: str, question_id: str) -> str:
+    """One brain per question — `lme-<run-id>-<qid>` — gives true data
+    isolation per LongMemEval question. Cleanup happens in batches so we
+    never hold more than `--batch-size` live brains at once."""
+    base = BRAIN_NAME_RE.sub("-", f"lme-{run_id}-{question_id}")
     return base[:BRAIN_NAME_MAX]
 
 
@@ -147,20 +150,32 @@ def answer_with_claude(
     return "".join(parts).strip()
 
 
-def ensure_shared_brain(
-    aju_agent: AjuClient,
+def provision_brain(
     aju_admin: AjuClient,
     agent_id: str | None,
     brain_name: str,
 ) -> str:
-    """Create the shared brain (via admin/user key) and grant the agent
-    editor access. Idempotent — safe to call every run; 409 on create is
-    treated as success and the existing brain is looked up."""
+    """Create a brain (via admin key) and grant the agent editor access.
+    Idempotent — 409 on create is treated as success and the existing brain
+    is looked up."""
     brain = aju_admin.create_brain(brain_name, type_="personal")
     if agent_id:
-        # grant is upsert-ish on the server — re-running is safe.
         aju_admin.grant_agent_brain(agent_id, brain_name, role="editor")
     return brain["id"]
+
+
+def cleanup_batch(
+    aju_admin: AjuClient,
+    batch: list[tuple[str, str]],
+) -> None:
+    """Delete every brain in `batch`. Errors are logged, not raised — a
+    failed delete should not abort the run; orphaned brains can be reaped
+    later via the aju UI using brains.jsonl."""
+    for brain_id, brain_name in batch:
+        try:
+            aju_admin.delete_brain(brain_id)
+        except Exception as e:
+            print(f"[{brain_name}] delete failed: {e}", file=sys.stderr)
 
 
 def ingest_question(
@@ -237,7 +252,12 @@ def main() -> int:
     parser.add_argument("--seeds", type=int, default=int(os.environ.get("SEEDS", "5")))
     parser.add_argument("--retrieve-limit", type=int, default=int(os.environ.get("LIMIT", "15")))
     parser.add_argument("--depth", type=int, default=int(os.environ.get("DEPTH", "1")))
-    parser.add_argument("--cleanup", action="store_true", help="Delete benchmark brains after answering")
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=int(os.environ.get("BATCH_SIZE", "50")),
+        help="Provision up to N brains, then delete the batch before continuing (default 50)",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Ingest but skip answer generation")
     args = parser.parse_args()
 
@@ -279,12 +299,10 @@ def main() -> int:
     aju_agent = AjuClient()
     aju_admin = AjuClient(api_key=admin_api_key)
 
-    # Single shared brain for the whole run. Doc paths and `type:` frontmatter
-    # scope each question's data so retrieval stays isolated via ?type=q-<qid>.
-    # Works inside a 1-brain plan cap and avoids the delete-endpoint bug.
-    brain_name = shared_brain_name(args.run_id)
-    shared_brain_id = ensure_shared_brain(aju_agent, aju_admin, agent_id, brain_name)
-    print(f"shared brain: {brain_name} (id={shared_brain_id})")
+    # Per-question brain isolation. We hold up to `--batch-size` live brains,
+    # then delete them in one batch and continue. Hypotheses are persisted as
+    # we go, so deleting brains is safe — the answer is already saved.
+    batch: list[tuple[str, str]] = []  # (brain_id, brain_name)
 
     try:
         with hypo_path.open("a") as hf, \
@@ -295,66 +313,79 @@ def main() -> int:
                 if qid in done:
                     continue
 
-                qtype = question_doc_type(qid)
+                brain_name = per_question_brain_name(args.run_id, qid)
+                try:
+                    brain_id = provision_brain(aju_admin, agent_id, brain_name)
+                except httpx.HTTPError as e:
+                    print(f"[{qid}] brain provisioning failed: {e}", file=sys.stderr)
+                    continue
+                batch.append((brain_id, brain_name))
+
                 t0 = time.perf_counter()
                 try:
                     ingested = ingest_question(aju_agent, brain_name, q)
                 except httpx.HTTPError as e:
                     print(f"[{qid}] ingest failed: {e}", file=sys.stderr)
+                    if len(batch) >= args.batch_size:
+                        cleanup_batch(aju_admin, batch)
+                        batch.clear()
                     continue
                 t_ingest = time.perf_counter() - t0
                 bf.write(json.dumps({
                     "question_id": qid,
-                    "brain_id": shared_brain_id,
+                    "brain_id": brain_id,
                     "brain_name": brain_name,
-                    "doc_type": qtype,
                     "ingested": ingested,
                 }) + "\n")
                 bf.flush()
 
-                if args.dry_run:
-                    continue
+                if not args.dry_run:
+                    t1 = time.perf_counter()
+                    try:
+                        retrieved = aju_agent.retrieve_with_content(
+                            brain_name,
+                            q["question"],
+                            seeds=args.seeds,
+                            limit=args.retrieve_limit,
+                            depth=args.depth,
+                        )
+                    except httpx.HTTPError as e:
+                        print(f"[{qid}] retrieve failed: {e}", file=sys.stderr)
+                        retrieved = []
+                    t_retrieve = time.perf_counter() - t1
 
-                t1 = time.perf_counter()
-                try:
-                    retrieved = aju_agent.retrieve_with_content(
-                        brain_name,
-                        q["question"],
-                        seeds=args.seeds,
-                        limit=args.retrieve_limit,
-                        depth=args.depth,
-                        doc_type=qtype,
-                    )
-                except httpx.HTTPError as e:
-                    print(f"[{qid}] retrieve failed: {e}", file=sys.stderr)
-                    retrieved = []
-                t_retrieve = time.perf_counter() - t1
+                    t2 = time.perf_counter()
+                    try:
+                        hypothesis = answer_with_claude(anth, answerer_model, q["question"], retrieved)
+                    except anthropic.APIError as e:
+                        print(f"[{qid}] answer failed: {e}", file=sys.stderr)
+                        hypothesis = ""
+                    t_answer = time.perf_counter() - t2
 
-                t2 = time.perf_counter()
-                try:
-                    hypothesis = answer_with_claude(anth, answerer_model, q["question"], retrieved)
-                except anthropic.APIError as e:
-                    print(f"[{qid}] answer failed: {e}", file=sys.stderr)
-                    hypothesis = ""
-                t_answer = time.perf_counter() - t2
+                    hf.write(json.dumps({
+                        "question_id": qid,
+                        "question_type": q.get("question_type"),
+                        "hypothesis": hypothesis,
+                        "retrieved_paths": [r["path"] for r in retrieved],
+                    }) + "\n")
+                    hf.flush()
 
-                hf.write(json.dumps({
-                    "question_id": qid,
-                    "question_type": q.get("question_type"),
-                    "hypothesis": hypothesis,
-                    "retrieved_paths": [r["path"] for r in retrieved],
-                }) + "\n")
-                hf.flush()
+                    lf.write(json.dumps({
+                        "question_id": qid,
+                        "ingest_s": round(t_ingest, 3),
+                        "retrieve_s": round(t_retrieve, 3),
+                        "answer_s": round(t_answer, 3),
+                        "retrieved_count": len(retrieved),
+                    }) + "\n")
+                    lf.flush()
 
-                lf.write(json.dumps({
-                    "question_id": qid,
-                    "ingest_s": round(t_ingest, 3),
-                    "retrieve_s": round(t_retrieve, 3),
-                    "answer_s": round(t_answer, 3),
-                    "retrieved_count": len(retrieved),
-                }) + "\n")
-                lf.flush()
+                if len(batch) >= args.batch_size:
+                    cleanup_batch(aju_admin, batch)
+                    batch.clear()
     finally:
+        if batch:
+            cleanup_batch(aju_admin, batch)
+            batch.clear()
         aju_agent.close()
         aju_admin.close()
 

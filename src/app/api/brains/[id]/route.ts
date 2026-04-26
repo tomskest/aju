@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { Prisma as PrismaTenant } from "@prisma/client-tenant";
 import { authenticate, isAuthError, type AuthSuccess } from "@/lib/auth";
-import { prisma } from "@/lib/db";
+import { prisma, tenantDbFor } from "@/lib/db";
 import { withTenant } from "@/lib/tenant";
 import { getActiveOrganizationId } from "@/lib/auth";
-import { deleteBrainWithStorage } from "@/lib/vault";
+import { cascadeDeleteBrainRows, wipeBrainObjects } from "@/lib/vault";
 
 export const runtime = "nodejs";
 
@@ -187,9 +187,16 @@ export async function PATCH(req: NextRequest, ctx: RouteContext) {
  * Owner-only. Refuses the delete when this is the caller's only owned brain
  * so they never end up without anywhere to write. Schema-level cascades wipe
  * the brain's documents, links, files, and access rows; we additionally wipe
- * the brain's objects from R2 before dropping DB rows (via
- * `deleteBrainWithStorage`). R2 failures are non-fatal and surfaced as
- * warnings so the DB never ends up pointing at dead storage.
+ * the brain's objects from R2 before dropping DB rows. R2 failures are
+ * non-fatal and surfaced as warnings so the DB never ends up pointing at
+ * dead storage.
+ *
+ * Two-phase implementation: wipe S3 BEFORE opening the cascade transaction.
+ * Tenant DBs run with `connection_limit=1`; if both phases shared one
+ * `withTenant({unscoped:true})` wrapper, the outer transaction would hold
+ * the only connection while `vaultFile.findMany` waited 10s for a second
+ * one and timed out with P2024. Splitting the phases keeps each query on a
+ * connection it can actually hold.
  */
 export async function DELETE(req: NextRequest, ctx: RouteContext) {
   const auth = await authenticate(req);
@@ -235,12 +242,17 @@ export async function DELETE(req: NextRequest, ctx: RouteContext) {
     );
   }
 
-  // deleteBrainWithStorage runs outside a scoped transaction — it takes a
-  // tenant client directly and wipes the tenant bucket plus the brain row.
-  // Bump the outer withTenant transaction timeout: the cascade-delete of
-  // VaultChangeLog + DocumentLink + VaultFile + VaultDocument for a large
-  // brain routinely exceeds Prisma's 5s default and surfaces as P2028.
-  const result = await withTenant(
+  // Phase 1: wipe S3 outside any transaction. `wipeBrainObjects` reads
+  // `vaultFile.s3Key` once and then issues a bulk S3 deleteMany — no DB
+  // transaction needed, and crucially no contention with phase 2's
+  // connection.
+  const tenant = await tenantDbFor(organizationId);
+  const wipe = await wipeBrainObjects(tenant, organizationId, id);
+
+  // Phase 2: cascade-delete DB rows inside a single transaction with RLS
+  // bypass. Bumped timeout because brains with hundreds of change-log rows
+  // routinely exceed Prisma's 5s default and surface as P2028.
+  await withTenant(
     {
       organizationId,
       userId: auth.userId,
@@ -248,13 +260,12 @@ export async function DELETE(req: NextRequest, ctx: RouteContext) {
       unscoped: true,
       timeoutMs: 120_000,
     },
-    async ({ tenant }) =>
-      deleteBrainWithStorage(tenant, organizationId, id),
+    async ({ tx }) => cascadeDeleteBrainRows(tx, id),
   );
 
   return NextResponse.json({
     ok: true,
-    r2ObjectsDeleted: result.r2ObjectsDeleted,
-    r2Warnings: result.r2Warnings,
+    r2ObjectsDeleted: wipe.deleted,
+    r2Warnings: wipe.warnings,
   });
 }

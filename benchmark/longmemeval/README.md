@@ -22,6 +22,7 @@ call is Anthropic.
 | Embeddings | Voyage `voyage-4-large` (1024d) | aju's default; asymmetric query/doc embedding |
 | Retrieval | aju deep-search (hybrid RRF + 1-hop graph expansion) | Uses the differentiating capability |
 | Isolation | One brain per question | True data isolation via aju's per-tenant DB semantics |
+| Live brain cap | 50 (`--batch-size`) | Provision up to N brains, delete the batch, repeat — keeps us inside per-org brain quotas |
 | Ingestion | One markdown doc per session, wikilinks between neighbors | Lets graph expansion stitch multi-session evidence |
 | Seeds / Limit / Depth | 5 / 15 / 1 | Tunable via env or CLI |
 | Temperature | 0.0 everywhere | Reproducibility |
@@ -75,14 +76,13 @@ done
 
 ## Cleanup
 
-Every question spawns a brain named `lme-<run-id>-<question_id>`. To delete as
-you go, add `--cleanup` to the runner:
+Every question spawns a brain named `lme-<run-id>-<question_id>`. The runner
+holds up to `--batch-size` (default 50) live brains, then deletes the batch
+and continues — so we never exceed the per-org brain quota and there's
+nothing to clean up at the end of a successful run.
 
-```sh
-.venv/bin/python run.py --run-id run-01 --cleanup
-```
-
-Or delete later via the aju web UI, referring to `out/<run-id>/brains.jsonl`.
+If a run crashes mid-batch, orphaned brains can be reaped via the aju web UI
+using `out/<run-id>/brains.jsonl` as the audit trail.
 
 ## Known limitations / caveats to publish alongside results
 
