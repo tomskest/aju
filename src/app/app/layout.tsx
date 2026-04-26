@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { currentUser } from "@/lib/auth";
 import OrgSwitcher from "@/components/app/OrgSwitcher";
 import TopBarTabs from "@/components/app/TopBarTabs";
+import TopSearch from "@/components/app/TopSearch";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +27,7 @@ export default async function AppLayout({
 
   return (
     <div className="min-h-screen bg-[var(--color-bg)] text-[var(--color-ink)]">
-      <header className="sticky top-0 z-20 flex h-[56px] items-center justify-between border-b border-white/5 bg-[var(--color-bg)]/95 px-4 backdrop-blur md:px-6">
+      <header className="sticky top-0 z-20 flex h-[56px] items-center gap-6 border-b border-white/5 bg-[var(--color-bg)]/95 px-4 backdrop-blur md:px-6">
         <div className="flex items-center gap-4">
           <Link
             href="/app"
@@ -39,6 +40,10 @@ export default async function AppLayout({
             aria-hidden
           />
           <OrgSwitcher />
+        </div>
+
+        <div className="flex flex-1 justify-center">
+          <TopSearch />
         </div>
 
         <div className="flex items-center gap-5">
