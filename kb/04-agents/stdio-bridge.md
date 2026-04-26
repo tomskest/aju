@@ -1,13 +1,13 @@
 ---
 title: The stdio bridge (retired)
-description: mcp/aju-server.ts — the legacy stdio MCP transport, what it did, and when you'd still want to spawn it.
+description: client/mcp/aju-server.ts — the legacy stdio MCP transport, what it did, and when you'd still want to spawn it.
 order: 70
 ---
 
 # The stdio bridge (retired)
 
 Before the remote `/api/mcp` endpoint existed, aju shipped a local stdio
-MCP server at `mcp/aju-server.ts`. Clients that couldn't speak Streamable
+MCP server at `client/mcp/aju-server.ts`. Clients that couldn't speak Streamable
 HTTP spawned it as a subprocess and talked to it over stdin/stdout using
 the MCP stdio transport.
 
@@ -28,14 +28,14 @@ tenant database.
 
 ## What it does
 
-`mcp/aju-server.ts` is a Node script that:
+`client/mcp/aju-server.ts` is a Node script that:
 
 1. Reads `MCP_BASE_URL`, `MCP_API_KEY`, and optional `MCP_BRAIN` from the
-   environment (`mcp/aju-server.ts:8-13`).
+   environment (`client/mcp/aju-server.ts:8-13`).
 2. Opens an `McpServer` over `StdioServerTransport`
-   (`mcp/aju-server.ts:515-517`).
+   (`client/mcp/aju-server.ts:515-517`).
 3. Forwards every tool call to the aju REST API over HTTP with bearer
-   auth (`fetchGet` / `fetchPost` at `mcp/aju-server.ts:15-150`).
+   auth (`fetchGet` / `fetchPost` at `client/mcp/aju-server.ts:15-150`).
 
 So it's a proxy — the tools run against the same `/api/vault/*` endpoints
 that the CLI hits. The difference from the remote `/api/mcp` endpoint is
@@ -96,7 +96,7 @@ Legacy fallback config
 For this to work today you'd need to:
 
 1. Revert the stub at `client/cli/cmd/stub.go` to actually boot
-   `mcp/aju-server.ts` (or run the Node script directly).
+   `client/mcp/aju-server.ts` (or run the Node script directly).
 2. Wire `AJU_API_KEY` → `MCP_API_KEY` and `MCP_BASE_URL=https://aju.sh` in
    the env.
 
@@ -116,7 +116,7 @@ Three reasons, all listed in the stub's own comment
    runtime available, install the MCP server npm dependency, and set
    `MCP_BASE_URL` + `MCP_API_KEY` env vars — all of which the remote
    endpoint eliminates.
-3. **Drift.** `mcp/aju-server.ts` proxies through REST, which means every
+3. **Drift.** `client/mcp/aju-server.ts` proxies through REST, which means every
    new feature on `/api/mcp` (brain scoping via query param, trimmed tool
    surface, `aju_*` naming) has to be replicated in the stdio file to
    match. Easier to have one authoritative surface.
@@ -128,7 +128,7 @@ the database differently:
 
 - **Remote `/api/mcp`** (`src/lib/mcp/tools.ts`) — each tool handler
   issues Prisma queries directly against the database. One process hop.
-- **Stdio `mcp/aju-server.ts`** (`mcp/aju-server.ts`) — each tool handler
+- **Stdio `client/mcp/aju-server.ts`** (`client/mcp/aju-server.ts`) — each tool handler
   HTTP-calls `/api/vault/*` on the hosted app, which in turn runs the
   same Prisma queries. Two process hops and a JSON round-trip.
 
@@ -138,7 +138,7 @@ and binds the auth context once in `buildServer(...)`.
 
 ## If you fork and want to keep stdio
 
-The file is otherwise complete. Edit `mcp/aju-server.ts` directly — it's
+The file is otherwise complete. Edit `client/mcp/aju-server.ts` directly — it's
 a single TypeScript file and the tool surface is trivial to extend. The
 shape of each registration:
 

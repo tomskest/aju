@@ -11,7 +11,7 @@ Three consumers for the search API:
 1. The `aju` Go CLI.
 2. The remote `/api/mcp` endpoint at `https://mcp.aju.sh/mcp`, which
    registers the `aju_*` tool surface directly against the caller's
-   tenant DB. The legacy stdio MCP server at `mcp/aju-server.ts` is
+   tenant DB. The legacy stdio MCP server at `client/mcp/aju-server.ts` is
    retired.
 3. The Next.js web app — **has no search UI today**.
 
@@ -204,7 +204,7 @@ return await withTenant(
 — which both routes the query to the right tenant DB
 (`tenantDbFor(organizationId)`) and opens a transaction with
 `SET LOCAL app.current_brain_ids = '…'` so RLS gates match the caller's
-`BrainAccess` rows. The legacy stdio bridge at `mcp/aju-server.ts` is
+`BrainAccess` rows. The legacy stdio bridge at `client/mcp/aju-server.ts` is
 retired; the native `/api/mcp` route binds auth + org context once per
 request instead of proxying through the REST layer.
 

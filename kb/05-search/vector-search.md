@@ -13,7 +13,7 @@ even if the two strings share no tokens. aju runs both and fuses them
 
 ## Provider and model
 
-`src/lib/embeddings.ts:13`
+`src/lib/embeddings/embeddings.ts:13`
 
 ```ts
 const VOYAGE_API = "https://api.voyageai.com/v1/embeddings";
@@ -23,12 +23,12 @@ const MODEL = "voyage-4-large";
 The provider is Voyage AI. The model is `voyage-4-large`, their flagship
 general-purpose multilingual retrieval model. It outputs **1024**
 dimensions — the single source of truth for that number is
-`EMBEDDING_DIMENSIONS` in `src/lib/embeddings.ts:118`. The pgvector
+`EMBEDDING_DIMENSIONS` in `src/lib/embeddings/embeddings.ts:118`. The pgvector
 column type in SQL must match, or inserts fail.
 
 ### Why Voyage and not OpenAI `text-embedding-3-small`
 
-From the comment at `src/lib/embeddings.ts:4`:
+From the comment at `src/lib/embeddings/embeddings.ts:4`:
 
 > Chosen over OpenAI text-embedding-3-small for retrieval quality on
 > developer/agent-memory corpora.
@@ -65,7 +65,7 @@ common write-side caller; retrieval paths must opt in to `"query"`.
 ### Truncation
 
 ```ts
-// src/lib/embeddings.ts:15
+// src/lib/embeddings/embeddings.ts:15
 const MAX_CHARS = 96000;
 ```
 
@@ -99,7 +99,7 @@ script picks them up.
 
 pgvector accepts a literal like `'[0.123, -0.456, …]'::vector`. The app
 builds that string with `toVectorLiteral`
-(`src/lib/embeddings.ts:112`):
+(`src/lib/embeddings/embeddings.ts:112`):
 
 ```ts
 export function toVectorLiteral(embedding: number[]): string {

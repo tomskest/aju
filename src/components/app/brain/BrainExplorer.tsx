@@ -251,7 +251,7 @@ export default function BrainExplorer({
       {/* Main pane */}
       <main className="flex-1 overflow-y-auto bg-[var(--color-bg)]">
         {currentDoc ? (
-          <article className="max-w-[960px] px-6 py-10 md:px-12">
+          <article className="mx-auto max-w-[960px] px-6 py-10 md:px-12">
             <header className="mb-8 border-b border-white/5 pb-6">
               <p className="font-mono text-[11px] text-[var(--color-faint)]">
                 {currentDoc.path}

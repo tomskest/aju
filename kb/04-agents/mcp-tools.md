@@ -167,7 +167,7 @@ transaction client `tx` obtained from `withTenant(...)`, so RLS by
 | `limit` | number? | Default 20, clamped to 100. |
 
 The query is embedded via `generateEmbedding(query, "query")`
-(`src/lib/embeddings.ts`) and converted to a pgvector literal via
+(`src/lib/embeddings/embeddings.ts`) and converted to a pgvector literal via
 `toVectorLiteral`.
 
 **Why RRF rather than weighted cosine + ts_rank:** the two scales aren't
@@ -203,7 +203,7 @@ or `"graph"`) and a hop distance.
 | `limit` | number? | Results after re-ranking. Default 20, max 100. |
 | `depth` | number? | Graph expansion depth: `1` (direct neighbors, default) or `2` (friends-of-friends). |
 
-Implementation: `mcp/aju-server.ts:512-552`, which proxies to the
+Implementation: `client/mcp/aju-server.ts:512-552`, which proxies to the
 `/api/vault/deep-search` REST route. Named `vault-deep-search`
 (kebab-case) rather than `aju_deep_search` because it currently ships via
 the stdio bridge surface; the remote endpoint inherits the same tool when
@@ -391,7 +391,7 @@ stateless request simply fails with the JSON-RPC `-32603` envelope.
 
 ## What's not exposed
 
-The legacy `mcp/aju-server.ts` stdio server exposes file-upload tools
+The legacy `client/mcp/aju-server.ts` stdio server exposes file-upload tools
 (`vault-upload-file`, `vault-list-files`, `vault-read-file`,
 `vault-delete-file`) and admin tools (`vault-rebuild-links`,
 `vault-backfill-embeddings`). The remote `aju_*` surface deliberately

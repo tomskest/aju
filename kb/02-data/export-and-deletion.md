@@ -77,16 +77,17 @@ guard — see [brains.md](./brains.md).
 Delegates the actual teardown to `deleteBrainWithStorage(tenant, brainId)`
 in `src/lib/brain-delete.ts`. The sequence:
 
-1. **Enumerate R2 keys from the tenant DB.**
+1. **Enumerate storage keys from the tenant DB.**
    `tenant.vaultFile.findMany({ where: { brainId }, select: { s3Key: true } })`.
    The DB is the source of truth for which objects belong to the brain —
    no reliance on `ListObjectsV2` against the bucket prefix.
-2. **Batch-delete from R2.** Keys are chunked at **1000 per
+2. **Batch-delete from storage.** Keys are chunked at **1000 per
    `DeleteObjectsCommand`** (the S3 batch-delete cap) and dispatched
-   sequentially. Per-key errors and batch failures are collected as
-   `r2Warnings` but do **not** abort the DB delete — orphaned objects
-   are recoverable via bucket lifecycle / manual sweep; orphaned DB
-   pointers are not.
+   sequentially against the tenant's bucket (Tigris in production). Per-key
+   errors and batch failures are collected as `r2Warnings` (legacy field
+   name retained in the API contract) but do **not** abort the DB delete
+   — orphaned objects are recoverable via bucket lifecycle / manual sweep;
+   orphaned DB pointers are not.
 3. **Drop the Brain row in the tenant DB.** Schema-level cascades then
    wipe:
    - `BrainAccess` rows → cascade.
@@ -96,11 +97,11 @@ in `src/lib/brain-delete.ts`. The sequence:
    - `VaultChangeLog` rows → the `documentId` FK sets to `NULL`; the rows
      stay behind as historical audit.
 
-**Why R2 first, DB after:** if the DB drop failed after a partial R2
-wipe, the `VaultFile` rows would still be present and the user could
-retry. The inverse — DB gone, objects orphaned with no way to enumerate
-them — is the failure mode we refuse to tolerate (it's both a cost leak
-and a privacy leak).
+**Why storage first, DB after:** if the DB drop failed after a partial
+storage wipe, the `VaultFile` rows would still be present and the user
+could retry. The inverse — DB gone, objects orphaned with no way to
+enumerate them — is the failure mode we refuse to tolerate (it's both a
+cost leak and a privacy leak).
 
 ## Organization deletion: `deleteOrganizationWithStorage(orgId)`
 
@@ -133,8 +134,8 @@ the `VaultFile` row. Order matters:
 1. Log first so the audit trail survives an S3 failure.
 2. S3 delete next so the bytes are gone even if the DB operation after it
    fails.
-3. DB delete last so orphaned R2 objects don't linger under an orphaned
-   metadata row.
+3. DB delete last so orphaned storage objects don't linger under an
+   orphaned metadata row.
 
 ## Document deletion: `POST /api/vault/delete`
 
@@ -155,7 +156,7 @@ The handler tears down the caller's footprint in four phases:
 
 1. **Orgs the user owns** — for every `Organization` where
    `ownerUserId = userId` (including the user's personal org),
-   `deleteOrganizationWithStorage` wipes each brain's R2 objects, drops
+   `deleteOrganizationWithStorage` wipes each brain's storage objects, drops
    the tenant DB via `destroyTenant`, and deletes the org row in the
    control DB. If any org delete fails, the error is captured as a
    warning and the remaining phases still run.
@@ -183,9 +184,10 @@ Response shape:
 }
 ```
 
-`r2Warnings` surfaces any per-key or batch failures from the R2 wipe
-(and any org-delete failures from phase 1). A non-empty warnings array
-is the signal to run a bucket sweep — the user row is still deleted.
+`r2Warnings` (legacy field name in the API response) surfaces any
+per-key or batch failures from the storage wipe (and any org-delete
+failures from phase 1). A non-empty warnings array is the signal to run
+a bucket sweep — the user row is still deleted.
 
 **What survives an account delete:**
 

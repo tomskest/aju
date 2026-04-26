@@ -92,9 +92,9 @@ high-level org delete flow used by `/api/me/delete` and the org settings
 delete action:
 
 1. Enumerate every brain's `VaultFile.s3Key` in the tenant DB, batch-delete
-   from R2 (1000 keys per `DeleteObjectsCommand`). Best-effort — if the
-   tenant DB is already gone from a prior attempt, the S3 wipe is skipped
-   with a warning.
+   from object storage (1000 keys per `DeleteObjectsCommand`). Best-effort
+   — if the tenant DB is already gone from a prior attempt, the storage
+   wipe is skipped with a warning.
 2. `evictTenantClient(orgId)` so no cached `PrismaClient` holds open
    connections.
 3. `destroyTenant(orgId)` drops DB + role + tenant row.

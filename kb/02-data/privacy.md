@@ -17,7 +17,7 @@ two stores:
 - **Postgres (Neon)** — structured data and text. Split across two planes:
   one control DB (identity, orgs, keys), and one tenant DB per org
   (brains, documents, files metadata).
-- **R2 (or any S3-compatible bucket)** — binary file contents.
+- **Tigris (or any S3-compatible bucket)** — binary file contents.
 
 That's the whole list of stores aju itself operates. One third party sees
 a subset of the text: **Voyage AI**, for embedding generation.
@@ -180,17 +180,17 @@ happens in-database, within the same org's DB.
 
 ## Deletion and residual data
 
-Deletion is real end-to-end — both the DB rows **and** the R2 bytes go.
+Deletion is real end-to-end — both the DB rows **and** the storage bytes go.
 
 - **Brain delete** (`DELETE /api/brains/[id]`) enumerates every
   `VaultFile.s3Key` for the brain from the tenant DB and batch-deletes
-  those objects from R2 (up to 1000 keys per `DeleteObjectsCommand`)
+  those objects from storage (up to 1000 keys per `DeleteObjectsCommand`)
   *before* dropping the `Brain` row. See
   [export-and-deletion.md](./export-and-deletion.md) for the exact
   sequence and failure semantics.
 - **Account delete** (`DELETE /api/me/delete`) walks every org the user
-  owns and runs `deleteOrganizationWithStorage`: wipe each brain's R2
-  objects, evict cached tenant clients, call `destroyTenant` (Neon API
+  owns and runs `deleteOrganizationWithStorage`: wipe each brain's
+  storage objects, evict cached tenant clients, call `destroyTenant` (Neon API
   drops the DB + role + deletes the tenant row), then delete the org row.
   Then drops the user's memberships in other orgs, deletes the `User` row
   (cascading sessions, api keys, accounts), and clears cookies.
@@ -207,10 +207,11 @@ Deletion is real end-to-end — both the DB rows **and** the R2 bytes go.
 
 - Postgres: everything structured, split between a shared control DB and
   one dedicated tenant DB per organization.
-- R2: binary file bytes only, keyed by human-readable brain path.
+- Object storage (Tigris in production): binary file bytes only, keyed
+  by human-readable brain path.
 - Voyage AI: text (title + tags + body or extracted text) for embedding.
 - No other third party sees content.
 - Users can pull a full copy via `/api/me/export` at any time.
-- Brain delete wipes DB rows **and** R2 objects. Account delete
+- Brain delete wipes DB rows **and** the storage objects. Account delete
   (`/api/me/delete`) drops every owned org's entire tenant database
-  (Neon API) plus the R2 objects, then deletes the user row.
+  (Neon API) plus the storage objects, then deletes the user row.

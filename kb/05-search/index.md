@@ -28,7 +28,7 @@ that *and then* expands through (3) to pull in graph-neighbour documents.
 
 - **No chunking.** Each document produces exactly one embedding of its
   full body (truncated to 96k chars for Voyage's 32k-token window). See
-  `src/lib/embeddings.ts:15`. Chunking was considered; for the target
+  `src/lib/embeddings/embeddings.ts:15`. Chunking was considered; for the target
   corpus (human-written notes, usually <10k tokens) whole-doc retrieval
   preserves context at the cost of some precision on very long docs.
 - **Everything is Postgres.** No Elasticsearch, no dedicated vector DB,

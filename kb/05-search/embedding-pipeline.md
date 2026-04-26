@@ -106,7 +106,7 @@ Four steps:
    content is what matters. No control-plane client is involved — the
    `vault_documents` table doesn't live there.
 2. Build the embedding text via `prepareDocumentText`
-   (`src/lib/embeddings.ts:28`). Strips YAML frontmatter, then joins
+   (`src/lib/embeddings/embeddings.ts:28`). Strips YAML frontmatter, then joins
    `[title, tags.join(", "), body]` with blank lines. The title gets
    put first deliberately — it's the strongest signal about what the
    document *is*, and Voyage's bag-of-context pooling still weights
@@ -234,7 +234,7 @@ DBs still have null embeddings.
 Same shape, different preparation:
 
 ```ts
-// src/lib/embeddings.ts:41
+// src/lib/embeddings/embeddings.ts:41
 export function prepareFileText(filename, tags, extractedText) {
   const parts = [filename];
   if (tags.length > 0) parts.push(tags.join(", "));
