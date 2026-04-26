@@ -74,7 +74,7 @@ export default function BrainExplorer({
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [openFolders, setOpenFolders] = useState<Set<string>>(() =>
-    initialOpenFolders(currentPath),
+    initialOpenFolders(docs, currentPath),
   );
   const mainRef = useRef<HTMLElement | null>(null);
   const articleRef = useRef<HTMLElement | null>(null);
@@ -625,12 +625,22 @@ function buildTree(docs: DocSummary[]): TreeNode[] {
   return root;
 }
 
-function initialOpenFolders(currentPath: string | null): Set<string> {
+function initialOpenFolders(
+  docs: DocSummary[],
+  currentPath: string | null,
+): Set<string> {
   const open = new Set<string>();
-  if (!currentPath) return open;
-  const parts = currentPath.split("/");
-  for (let i = 1; i < parts.length; i++) {
-    open.add(parts.slice(0, i).join("/"));
+  for (const doc of docs) {
+    const parts = doc.path.split("/");
+    for (let i = 1; i < parts.length; i++) {
+      open.add(parts.slice(0, i).join("/"));
+    }
+  }
+  if (currentPath) {
+    const parts = currentPath.split("/");
+    for (let i = 1; i < parts.length; i++) {
+      open.add(parts.slice(0, i).join("/"));
+    }
   }
   return open;
 }
