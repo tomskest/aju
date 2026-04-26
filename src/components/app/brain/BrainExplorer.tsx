@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
 import KbProse from "@/components/kb/KbProse";
+import DocToc from "@/components/kb/DocToc";
 
 type DocSummary = {
   id: string;
@@ -75,6 +76,8 @@ export default function BrainExplorer({
   const [openFolders, setOpenFolders] = useState<Set<string>>(() =>
     initialOpenFolders(currentPath),
   );
+  const mainRef = useRef<HTMLElement | null>(null);
+  const articleRef = useRef<HTMLElement | null>(null);
 
   const tree = useMemo(() => buildTree(docs), [docs]);
 
@@ -249,9 +252,16 @@ export default function BrainExplorer({
       </aside>
 
       {/* Main pane */}
-      <main className="flex-1 overflow-y-auto bg-[var(--color-bg)]">
+      <main
+        ref={mainRef}
+        className="flex-1 overflow-y-auto bg-[var(--color-bg)]"
+      >
         {currentDoc ? (
-          <article className="mx-auto max-w-[960px] px-6 py-10 md:px-12">
+          <div className="mx-auto flex max-w-[1400px] gap-10 px-6 md:px-12">
+          <article
+            ref={articleRef}
+            className="mx-auto min-w-0 max-w-[960px] flex-1 py-10"
+          >
             <header className="mb-8 border-b border-white/5 pb-6">
               <p className="font-mono text-[11px] text-[var(--color-faint)]">
                 {currentDoc.path}
@@ -331,6 +341,16 @@ export default function BrainExplorer({
               <KbProse html={currentDoc.rendered} />
             )}
           </article>
+            {!editing && (
+              <aside className="sticky top-10 hidden h-[calc(100vh-7rem)] w-56 shrink-0 self-start overflow-y-auto py-10 xl:block">
+                <DocToc
+                  articleRef={articleRef}
+                  scrollRoot={mainRef}
+                  contentKey={`${currentDoc.path}|${currentDoc.updatedAt}`}
+                />
+              </aside>
+            )}
+          </div>
         ) : missingHint ? (
           <div className="mx-auto max-w-[640px] px-6 py-20 md:px-10">
             <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--color-faint)]">
