@@ -20,6 +20,20 @@ type DocFull = DocSummary & {
   wordCount: number;
 };
 
+type VersionMeta = {
+  id: string;
+  versionN: number;
+  contentHash: string;
+  parentHash: string | null;
+  mergeParentHash: string | null;
+  source: string;
+  changedBy: string | null;
+  message: string | null;
+  createdAt: string;
+};
+
+type VersionDetail = VersionMeta & { content: string };
+
 type Props = {
   brainName: string;
   brainType: string;
@@ -77,6 +91,18 @@ export default function BrainExplorer({
   const [openFolders, setOpenFolders] = useState<Set<string>>(() =>
     initialOpenFolders(docs, currentPath),
   );
+
+  // History panel — shows the version DAG for the focused doc and lets the
+  // user preview/restore any past commit. Versions are loaded lazily on
+  // first open and refreshed after each restore so the list stays current.
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [versions, setVersions] = useState<VersionMeta[] | null>(null);
+  const [versionsLoading, setVersionsLoading] = useState(false);
+  const [selectedVersion, setSelectedVersion] = useState<VersionDetail | null>(
+    null,
+  );
+  const [versionDetailLoading, setVersionDetailLoading] = useState(false);
+
   const mainRef = useRef<HTMLElement | null>(null);
   const articleRef = useRef<HTMLElement | null>(null);
 
@@ -150,6 +176,103 @@ export default function BrainExplorer({
       return;
     }
     setEditing(false);
+    startTransition(() => router.refresh());
+  };
+
+  // ── History / versions ──────────────────────────────────────
+  const fetchVersions = async () => {
+    if (!currentDoc) return;
+    setVersionsLoading(true);
+    try {
+      const params = new URLSearchParams({
+        brain: brainName,
+        path: currentDoc.path,
+        limit: "100",
+      });
+      const res = await fetch(`/api/vault/document/versions?${params}`);
+      if (!res.ok) {
+        setError("Failed to load history");
+        return;
+      }
+      const body = (await res.json()) as { versions: VersionMeta[] };
+      setVersions(body.versions);
+    } finally {
+      setVersionsLoading(false);
+    }
+  };
+
+  const openHistory = () => {
+    setHistoryOpen(true);
+    setSelectedVersion(null);
+    if (versions === null) void fetchVersions();
+  };
+
+  const closeHistory = () => {
+    setHistoryOpen(false);
+    setSelectedVersion(null);
+  };
+
+  const selectVersion = async (v: VersionMeta) => {
+    if (!currentDoc) return;
+    setVersionDetailLoading(true);
+    setSelectedVersion(null);
+    try {
+      const params = new URLSearchParams({
+        brain: brainName,
+        path: currentDoc.path,
+        n: String(v.versionN),
+      });
+      const res = await fetch(`/api/vault/document/version?${params}`);
+      if (!res.ok) {
+        setError("Failed to load version content");
+        return;
+      }
+      const body = (await res.json()) as VersionDetail;
+      setSelectedVersion(body);
+    } finally {
+      setVersionDetailLoading(false);
+    }
+  };
+
+  const restoreVersion = async (v: VersionDetail) => {
+    if (!currentDoc) return;
+    if (
+      !confirm(
+        `Restore ${currentDoc.path} to version v${v.versionN} (${v.contentHash.slice(0, 10)}…)?\n\nThis writes a new version on top — the current head stays in history.`,
+      )
+    ) {
+      return;
+    }
+    setError(null);
+    // Restore = a CAS update against the current head, with the
+    // historical content as the new body. The diff is the rollback.
+    const res = await fetch(
+      `/api/vault/update?brain=${encodeURIComponent(brainName)}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          path: currentDoc.path,
+          content: v.content,
+          source: "web",
+          baseHash: currentDoc.contentHash,
+          baseContent: currentDoc.content,
+        }),
+      },
+    );
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      setError(
+        res.status === 409
+          ? "Document changed while you were viewing history. Reload and try again."
+          : body.error || "restore_failed",
+      );
+      return;
+    }
+    // Refresh: server-side props re-fetch will pick up the new head,
+    // and we drop the history overlay so the user sees the restored doc.
+    closeHistory();
+    setVersions(null);
     startTransition(() => router.refresh());
   };
 
@@ -308,6 +431,17 @@ export default function BrainExplorer({
                       </button>
                       <button
                         type="button"
+                        onClick={historyOpen ? closeHistory : openHistory}
+                        className={`rounded-md border px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.18em] transition ${
+                          historyOpen
+                            ? "border-[var(--color-accent)]/40 text-[var(--color-accent)]"
+                            : "border-white/10 text-[var(--color-muted)] hover:border-white/20 hover:text-[var(--color-ink)]"
+                        }`}
+                      >
+                        history
+                      </button>
+                      <button
+                        type="button"
                         onClick={handleDelete}
                         className="rounded-md border border-white/10 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--color-muted)] transition hover:border-red-500/40 hover:text-red-400"
                       >
@@ -354,17 +488,37 @@ export default function BrainExplorer({
                 spellCheck={false}
                 className="min-h-[60vh] w-full resize-y rounded-md border border-white/10 bg-[var(--color-panel)] p-4 font-mono text-[13px] leading-relaxed text-[var(--color-ink)] focus:border-[var(--color-accent)]/40 focus:outline-none"
               />
+            ) : selectedVersion ? (
+              <VersionPreview
+                version={selectedVersion}
+                isHead={selectedVersion.contentHash === currentDoc.contentHash}
+                canRestore={canWrite}
+                onClose={() => setSelectedVersion(null)}
+                onRestore={() => restoreVersion(selectedVersion)}
+              />
             ) : (
               <KbProse html={currentDoc.rendered} />
             )}
           </article>
             {!editing && (
-              <aside className="sticky top-10 hidden h-[calc(100vh-7rem)] w-56 shrink-0 self-start overflow-y-auto py-10 xl:block">
-                <DocToc
-                  articleRef={articleRef}
-                  scrollRoot={mainRef}
-                  contentKey={`${currentDoc.path}|${currentDoc.updatedAt}`}
-                />
+              <aside className="sticky top-10 hidden h-[calc(100vh-7rem)] w-72 shrink-0 self-start overflow-y-auto py-10 xl:block">
+                {historyOpen ? (
+                  <HistoryPanel
+                    versions={versions}
+                    loading={versionsLoading}
+                    headHash={currentDoc.contentHash}
+                    selectedHash={selectedVersion?.contentHash ?? null}
+                    detailLoading={versionDetailLoading}
+                    onSelect={selectVersion}
+                    onClose={closeHistory}
+                  />
+                ) : (
+                  <DocToc
+                    articleRef={articleRef}
+                    scrollRoot={mainRef}
+                    contentKey={`${currentDoc.path}|${currentDoc.updatedAt}`}
+                  />
+                )}
               </aside>
             )}
           </div>
@@ -686,4 +840,161 @@ function humanize(slug: string): string {
     .replace(/\.md$/, "")
     .replace(/\b\w/g, (c) => c.toUpperCase())
     .trim();
+}
+
+// ── History panel ──────────────────────────────────────────
+function HistoryPanel({
+  versions,
+  loading,
+  headHash,
+  selectedHash,
+  detailLoading,
+  onSelect,
+  onClose,
+}: {
+  versions: VersionMeta[] | null;
+  loading: boolean;
+  headHash: string;
+  selectedHash: string | null;
+  detailLoading: boolean;
+  onSelect: (v: VersionMeta) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="flex flex-col gap-3 px-2">
+      <div className="flex items-center justify-between border-b border-white/5 pb-2">
+        <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--color-faint)]">
+          history
+        </p>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="close history"
+          className="font-mono text-[11px] text-[var(--color-faint)] transition hover:text-[var(--color-ink)]"
+        >
+          ×
+        </button>
+      </div>
+      {loading && (
+        <p className="font-mono text-[11px] text-[var(--color-faint)]">
+          loading…
+        </p>
+      )}
+      {!loading && versions !== null && versions.length === 0 && (
+        <p className="font-mono text-[11px] text-[var(--color-faint)]">
+          no versions recorded
+        </p>
+      )}
+      {!loading && versions !== null && versions.length > 0 && (
+        <ol className="flex flex-col gap-1.5">
+          {versions.map((v) => {
+            const isHead = v.contentHash === headHash;
+            const isSelected = v.contentHash === selectedHash;
+            return (
+              <li key={v.id}>
+                <button
+                  type="button"
+                  onClick={() => onSelect(v)}
+                  disabled={detailLoading}
+                  className={`flex w-full flex-col gap-0.5 rounded-md border px-2.5 py-2 text-left transition ${
+                    isSelected
+                      ? "border-[var(--color-accent)]/40 bg-[var(--color-accent)]/5"
+                      : "border-white/5 hover:border-white/15"
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-[11px] text-[var(--color-ink)]">
+                      v{v.versionN}
+                    </span>
+                    {isHead && (
+                      <span className="rounded-sm bg-[var(--color-accent)]/15 px-1 py-px font-mono text-[9px] uppercase tracking-[0.18em] text-[var(--color-accent)]">
+                        head
+                      </span>
+                    )}
+                    {v.mergeParentHash && (
+                      <span
+                        title="three-way merge commit"
+                        className="rounded-sm bg-blue-400/15 px-1 py-px font-mono text-[9px] uppercase tracking-[0.18em] text-blue-300"
+                      >
+                        merge
+                      </span>
+                    )}
+                  </div>
+                  <p className="font-mono text-[10px] text-[var(--color-faint)]">
+                    {v.contentHash.slice(0, 10)}…
+                  </p>
+                  <p className="font-mono text-[10px] text-[var(--color-muted)]">
+                    {new Date(v.createdAt).toLocaleString()}
+                  </p>
+                  <p className="font-mono text-[10px] text-[var(--color-faint)]">
+                    {v.source}
+                    {v.changedBy ? ` · ${v.changedBy}` : ""}
+                  </p>
+                </button>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+// ── Version preview ────────────────────────────────────────
+function VersionPreview({
+  version,
+  isHead,
+  canRestore,
+  onClose,
+  onRestore,
+}: {
+  version: VersionDetail;
+  isHead: boolean;
+  canRestore: boolean;
+  onClose: () => void;
+  onRestore: () => void;
+}) {
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center justify-between rounded-md border border-white/10 bg-[var(--color-panel)] px-3 py-2">
+        <div className="flex flex-col gap-0.5">
+          <p className="font-mono text-[11px] text-[var(--color-ink)]">
+            viewing v{version.versionN}
+            {isHead && (
+              <span className="ml-2 rounded-sm bg-[var(--color-accent)]/15 px-1 py-px text-[9px] uppercase tracking-[0.18em] text-[var(--color-accent)]">
+                head
+              </span>
+            )}
+          </p>
+          <p className="font-mono text-[10px] text-[var(--color-faint)]">
+            {version.contentHash.slice(0, 16)}… ·{" "}
+            {new Date(version.createdAt).toLocaleString()} ·{" "}
+            {version.source}
+            {version.changedBy ? ` · ${version.changedBy}` : ""}
+          </p>
+        </div>
+        <div className="flex gap-2">
+          {canRestore && !isHead && (
+            <button
+              type="button"
+              onClick={onRestore}
+              className="rounded-md border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--color-accent)] transition hover:bg-[var(--color-accent)]/20"
+            >
+              restore
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md border border-white/10 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--color-muted)] transition hover:border-white/20 hover:text-[var(--color-ink)]"
+          >
+            close
+          </button>
+        </div>
+      </div>
+      <pre className="overflow-x-auto rounded-md border border-white/10 bg-[var(--color-panel)] p-4 font-mono text-[12px] leading-relaxed text-[var(--color-ink)] whitespace-pre-wrap">
+        {version.content}
+      </pre>
+    </div>
+  );
 }
