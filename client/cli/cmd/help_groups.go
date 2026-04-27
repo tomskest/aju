@@ -168,13 +168,17 @@ Usage:
   aju brains <subcommand> [flags]
 
 Subcommands:
-  list                   List brains accessible to the active profile
-                         (active brain marked with *)
-  create <name>          Create a brain in the active org
-                           --type personal|org   (default: personal)
-  delete <name>          Delete a brain. Refuses to delete your only owned brain.
-                           --yes                 skip confirmation prompt
-  switch <name>          Switch the active brain (writes ~/.aju/config.json)
+  list                       List brains accessible to the active profile
+                             (active brain marked with *)
+  create <name>              Create a brain in the active org
+                               --type personal|org   (default: personal)
+  delete <name>              Delete a brain. Refuses to delete your only owned brain.
+                               --yes                 skip confirmation prompt
+  switch <name>              Switch the active brain (writes ~/.aju/config.json)
+  share <name> <email>       Grant a user access to a brain. Owner-only.
+                               --role viewer|editor|owner (default: editor)
+  unshare <name> <email>     Revoke a user's access. Owner-only. Refuses last owner.
+  members <name>             List explicit user grants on a brain.
 
 Examples:
   aju brains list
@@ -182,6 +186,9 @@ Examples:
   aju brains create "Acme" --type org
   aju brains switch Personal
   aju brains delete "stale-brain" --yes
+  aju brains share "research" lead@example.com --role owner
+  aju brains members "research"
+  aju brains unshare "research" lead@example.com
 
 Global flag:
   --brain <name>         target a specific brain for one call (overrides the

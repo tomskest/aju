@@ -60,7 +60,10 @@ case "semantic":   exitWith(cmd.Semantic(rest))
 case "read":       exitWith(cmd.Read(rest))
 case "browse":     exitWith(cmd.Browse(rest))
 case "create":     exitWith(cmd.Create(rest))
+case "self-update": exitWith(cmd.UpdateSelf(rest))
 case "update":
+  // Bare `aju update` (no path) is a deprecated alias for `self-update`.
+  // It still dispatches there with a stderr warning.
   if isSelfUpdateInvocation(rest) { exitWith(cmd.UpdateSelf(rest)) }
   else                            { exitWith(cmd.UpdateNote(rest)) }
 case "delete":     exitWith(cmd.Delete(rest))
@@ -78,14 +81,18 @@ deps in `main`, no implicit behavior, `go build` produces a single binary
 that starts in a few milliseconds. Worth it for a utility people type into
 a terminal dozens of times a day.
 
-### The `update` dual-dispatch
+### The `update` dual-dispatch (legacy, deprecated)
 
-`aju update` is deliberately overloaded. Zero positional args → self-update
-the binary. One positional path → update a note's content. The
-`isSelfUpdateInvocation` helper at `main.go:183-198` scans for a
-non-flag argument to pick which handler to call. It's ugly, but it keeps
-`aju update topics/foo.md` natural and `aju update` (no args) mean the
-thing users expect.
+The canonical commands are `aju self-update` for the CLI binary and
+`aju update <path>` for notes — two unrelated operations with non-overlapping
+shapes.
+
+For the deprecation window, bare `aju update` (no positional path) still
+dispatches to `cmd.UpdateSelf` and prints a stderr warning telling the
+caller to use `aju self-update`. The `isSelfUpdateInvocation` helper
+scans for a non-flag positional to drive the dispatch. Once the warning
+window closes, the `case "update"` branch should require a positional
+path and the helper can be deleted.
 
 ## Config — profiles
 

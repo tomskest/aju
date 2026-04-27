@@ -93,9 +93,16 @@ func main() {
 		exitWith(cmd.Browse(rest))
 	case "create":
 		exitWith(cmd.Create(rest))
+	case "self-update":
+		exitWith(cmd.UpdateSelf(rest))
 	case "update":
-		// No args or flag-only → self-update. A positional arg → note update.
+		// Canonical forms after the rename:
+		//   `aju self-update`           → CLI binary self-update
+		//   `aju update <path>`         → note content update
+		// For backwards compatibility, `aju update` (no positional path)
+		// still runs self-update but prints a deprecation warning.
 		if isSelfUpdateInvocation(rest) {
+			fmt.Fprintln(os.Stderr, "warning: 'aju update' (no path) is deprecated; use 'aju self-update' instead.")
 			exitWith(cmd.UpdateSelf(rest))
 		} else {
 			exitWith(cmd.UpdateNote(rest))
@@ -166,6 +173,12 @@ func dispatchBrains(args []string) error {
 		return cmd.BrainsDelete(args[1:])
 	case "switch":
 		return cmd.BrainsSwitch(args[1:])
+	case "share":
+		return cmd.BrainsShare(args[1:])
+	case "unshare":
+		return cmd.BrainsUnshare(args[1:])
+	case "members":
+		return cmd.BrainsMembers(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown brains subcommand: %s\n\n", args[0])
 		cmd.HelpBrains()
@@ -221,10 +234,12 @@ func isHelpArg(s string) bool {
 	return s == "help" || s == "--help" || s == "-h" || s == "-help"
 }
 
-// isSelfUpdateInvocation reports whether `aju update <args>` should dispatch
-// to the self-update handler (no positional path arg) rather than note
-// update. Flags are transparent — only a positional (non-flag) argument
-// implies the note path form.
+// isSelfUpdateInvocation reports whether a legacy `aju update <args>` call
+// should dispatch to the self-update handler (no positional path arg)
+// rather than note update. Flags are transparent — only a positional
+// (non-flag) argument implies the note path form. New callers should use
+// `aju self-update` directly; this helper exists for the deprecation
+// window where bare `aju update` still works with a warning.
 func isSelfUpdateInvocation(args []string) bool {
 	for i := 0; i < len(args); i++ {
 		a := args[i]

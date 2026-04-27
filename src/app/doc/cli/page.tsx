@@ -95,7 +95,7 @@ const GROUPS: Group[] = [
     name: "system",
     summary: "Maintenance, diagnostics, and version info.",
     commands: [
-      { cmd: "aju update", desc: "Self-update from manifest" },
+      { cmd: "aju self-update", desc: "Update the CLI binary from the release manifest" },
       { cmd: "aju news", desc: "Replay unseen announcements" },
       { cmd: "aju doctor", desc: "Diagnose config / auth issues" },
       { cmd: "aju version", desc: "Print CLI version" },

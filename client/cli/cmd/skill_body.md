@@ -304,7 +304,7 @@ aju whoami                                # email only
 aju doctor                                # full environment + connectivity check
 aju help                                  # command overview
 aju help <command>                        # per-command usage
-aju update                                # self-update to latest release
+aju self-update                           # update the CLI binary to latest release
 aju news                                  # product announcements
 ```
 

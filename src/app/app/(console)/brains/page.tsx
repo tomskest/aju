@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { tenantDbFor } from "@/lib/db";
+import { prisma, tenantDbFor } from "@/lib/db";
 import {
   currentAuth,
   currentUser,
@@ -81,10 +81,20 @@ export default async function BrainsPage({ searchParams }: PageProps) {
   const errorMessage = sp.error ? ERROR_MESSAGES[sp.error] ?? sp.error : null;
   const okMessage = sp.ok ? OK_MESSAGES[sp.ok] ?? sp.ok : null;
 
-  const access = organizationId
+  type BrainRow = {
+    brain: {
+      id: string;
+      name: string;
+      type: string;
+      createdAt: Date;
+      _count: { documents: number };
+    };
+    role: string;
+  };
+  const access: BrainRow[] = organizationId
     ? await (async () => {
         const tenant = await tenantDbFor(organizationId);
-        return tenant.brainAccess.findMany({
+        const explicit = await tenant.brainAccess.findMany({
           where: { userId: user.id },
           include: {
             brain: {
@@ -95,6 +105,32 @@ export default async function BrainsPage({ searchParams }: PageProps) {
           },
           orderBy: { brain: { createdAt: "asc" } },
         });
+        const byBrainId = new Map<string, BrainRow>();
+        for (const a of explicit) {
+          byBrainId.set(a.brain.id, { brain: a.brain, role: a.role });
+        }
+
+        // Org-fallback: list type:"org" brains in this org as implicit viewers
+        // when the caller is a member, mirroring GET /api/brains.
+        const membership = await prisma.organizationMembership.findFirst({
+          where: { userId: user.id, organizationId },
+          select: { id: true },
+        });
+        if (membership) {
+          const orgBrains = await tenant.brain.findMany({
+            where: { type: "org" },
+            include: { _count: { select: { documents: true } } },
+            orderBy: { createdAt: "asc" },
+          });
+          for (const b of orgBrains) {
+            if (byBrainId.has(b.id)) continue;
+            byBrainId.set(b.id, { brain: b, role: "editor" });
+          }
+        }
+
+        return [...byBrainId.values()].sort(
+          (a, b) => a.brain.createdAt.getTime() - b.brain.createdAt.getTime(),
+        );
       })()
     : [];
 

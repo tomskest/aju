@@ -50,6 +50,10 @@ export type AuditEventType =
   | "agent.granted"
   | "agent.revoked"
   | "agent.deleted"
+  // User grants (per-brain access)
+  | "brain.access.granted"
+  | "brain.access.updated"
+  | "brain.access.revoked"
   // Invitations
   | "invitation.created"
   | "invitation.canceled"

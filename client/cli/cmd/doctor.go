@@ -114,7 +114,7 @@ the server is unreachable — the one case that's usually actionable.`,
 			case 0:
 				fmt.Printf("  status:        up to date\n")
 			case -1:
-				fmt.Printf("  status:        update available (run `aju update`)\n")
+				fmt.Printf("  status:        update available (run `aju self-update`)\n")
 			case 1:
 				fmt.Printf("  status:        ahead of latest (dev build)\n")
 			}

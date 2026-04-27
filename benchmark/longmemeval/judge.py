@@ -1,15 +1,17 @@
 """
-Claude-based LongMemEval judge. Mirrors the upstream evaluate_qa.py contract:
-given a hypothesis file + the oracle dataset, emit per-question pass/fail and
+LongMemEval judge. Mirrors the upstream evaluate_qa.py contract: given a
+hypothesis file + the oracle dataset, emit per-question pass/fail and
 aggregate accuracy per category.
 
-Why Claude as judge: we only have Anthropic credits. Known bias risk when the
-answerer is also Claude-family — we use Sonnet to answer and Haiku to judge
-(different size + RLHF), and publish the config so anyone can rerun with their
-preferred judge model.
+Two judge providers, picked via `--judge-provider` (or `JUDGE_PROVIDER` env):
+  * `anthropic` (default) — Claude. We use Haiku as judge against a Sonnet
+    answerer to mitigate single-family preference leakage.
+  * `openai` — GPT-4o. Useful for cross-family validation and to match the
+    judge convention vendors most commonly publish against.
 
-Prompt is adapted from LongMemEval's judge template: a strict yes/no on whether
-the hypothesis is semantically equivalent to the gold answer for the question.
+Prompt is identical across providers — adapted from LongMemEval's judge
+template: a strict yes/no on whether the hypothesis is semantically
+equivalent to the gold answer for the question.
 """
 
 from __future__ import annotations
@@ -25,6 +27,12 @@ from typing import Any
 import anthropic
 from dotenv import load_dotenv
 from tqdm import tqdm
+
+try:  # OpenAI is optional at import time so the Anthropic path keeps working
+    from openai import OpenAI, APIError as OpenAIAPIError  # type: ignore
+except ImportError:  # pragma: no cover
+    OpenAI = None  # type: ignore[assignment]
+    OpenAIAPIError = Exception  # type: ignore[assignment]
 
 
 JUDGE_SYSTEM = (
@@ -71,7 +79,7 @@ def build_judge_prompt(question: str, gold: str, hypothesis: str, question_type:
     )
 
 
-def judge_one(
+def judge_one_anthropic(
     client: anthropic.Anthropic,
     model: str,
     question: str,
@@ -79,15 +87,53 @@ def judge_one(
     hypothesis: str,
     question_type: str | None,
 ) -> bool:
-    msg = client.messages.create(
-        model=model,
-        max_tokens=4,
-        temperature=0.0,
-        system=JUDGE_SYSTEM,
-        messages=[{"role": "user", "content": build_judge_prompt(question, gold, hypothesis, question_type)}],
-    )
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "max_tokens": 4,
+        "system": JUDGE_SYSTEM,
+        "messages": [{"role": "user", "content": build_judge_prompt(question, gold, hypothesis, question_type)}],
+    }
+    # Opus 4.x deprecated `temperature`; everything else still accepts it.
+    if not model.startswith("claude-opus-4"):
+        kwargs["temperature"] = 0.0
+    msg = client.messages.create(**kwargs)
     parts = [b.text for b in msg.content if getattr(b, "type", None) == "text"]
     verdict = "".join(parts).strip().lower()
+    return verdict.startswith("y")
+
+
+def judge_one_openai(
+    client: "OpenAI",
+    model: str,
+    question: str,
+    gold: str,
+    hypothesis: str,
+    question_type: str | None,
+) -> bool:
+    """Same yes/no contract as the Anthropic judge, called against OpenAI's
+    chat-completions API. GPT-5.x reasoning models reject `temperature` and
+    use `max_completion_tokens` instead of `max_tokens`; older GPT-4* models
+    still accept the legacy parameters. We branch on model id."""
+    is_gpt5 = model.startswith("gpt-5")
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": JUDGE_SYSTEM},
+            {"role": "user", "content": build_judge_prompt(question, gold, hypothesis, question_type)},
+        ],
+    }
+    if is_gpt5:
+        # GPT-5.x reasoning models silently consume some of the cap on
+        # internal reasoning before the visible output. With max=4 we'd
+        # truncate the answer (`finish_reason=length`); 32 leaves headroom
+        # for any minimal-effort reasoning while keeping cost trivial for
+        # a yes/no response.
+        kwargs["max_completion_tokens"] = 32
+    else:
+        kwargs["max_tokens"] = 4
+        kwargs["temperature"] = 0.0
+    resp = client.chat.completions.create(**kwargs)
+    verdict = (resp.choices[0].message.content or "").strip().lower()
     return verdict.startswith("y")
 
 
@@ -97,8 +143,20 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--hypotheses", required=True)
     parser.add_argument("--dataset", default="data/longmemeval_s.json")
-    parser.add_argument("--out", default=None, help="per-instance judgments jsonl (default: <hypotheses>.judged.jsonl)")
-    parser.add_argument("--report", default=None, help="aggregate report json (default: <hypotheses>.report.json)")
+    parser.add_argument("--out", default=None, help="per-instance judgments jsonl (default: <hypotheses>.judged.jsonl, or .<provider>.judged.jsonl when provider != anthropic)")
+    parser.add_argument("--report", default=None, help="aggregate report json (default: <hypotheses>.report.json, or .<provider>.report.json when provider != anthropic)")
+    parser.add_argument(
+        "--judge-provider",
+        choices=("anthropic", "openai"),
+        default=os.environ.get("JUDGE_PROVIDER", "anthropic"),
+        help="LLM provider for the judge (default: anthropic)",
+    )
+    parser.add_argument(
+        "--judge-model",
+        default=None,
+        help="Override the judge model. Defaults to JUDGE_MODEL env, "
+             "or claude-haiku-4-5-20251001 / gpt-4o based on provider.",
+    )
     args = parser.parse_args()
 
     hypo_path = Path(args.hypotheses)
@@ -111,11 +169,45 @@ def main() -> int:
         dataset: list[dict[str, Any]] = json.load(f)
     by_qid = {q["question_id"]: q for q in dataset}
 
-    out_path = Path(args.out) if args.out else hypo_path.with_suffix(".judged.jsonl")
-    report_path = Path(args.report) if args.report else hypo_path.with_suffix(".report.json")
+    # Resolve provider + model. Each provider gets its own default model so a
+    # bare `--judge-provider openai` does the obvious thing.
+    provider = args.judge_provider
+    if args.judge_model:
+        judge_model = args.judge_model
+    else:
+        env_model = os.environ.get("JUDGE_MODEL")
+        if env_model and provider == "anthropic":
+            judge_model = env_model
+        elif provider == "openai":
+            judge_model = "gpt-4o"
+        else:
+            judge_model = "claude-haiku-4-5-20251001"
 
-    judge_model = os.environ.get("JUDGE_MODEL", "claude-haiku-4-5-20251001")
-    anth = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    # Auto-suffix output files with the provider name so a cross-judge re-run
+    # (e.g., `--judge-provider openai` against the same hypotheses.jsonl)
+    # doesn't clobber the original Anthropic-judged outputs.
+    if args.out:
+        out_path = Path(args.out)
+    elif provider == "anthropic":
+        out_path = hypo_path.with_suffix(".judged.jsonl")
+    else:
+        out_path = hypo_path.with_suffix(f".{provider}.judged.jsonl")
+    if args.report:
+        report_path = Path(args.report)
+    elif provider == "anthropic":
+        report_path = hypo_path.with_suffix(".report.json")
+    else:
+        report_path = hypo_path.with_suffix(f".{provider}.report.json")
+
+    if provider == "openai":
+        if OpenAI is None:
+            print("openai package not installed; pip install openai", file=sys.stderr)
+            return 1
+        oai = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        anth = None
+    else:
+        anth = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+        oai = None
 
     # Load any existing judgments to resume.
     already: set[str] = set()
@@ -146,8 +238,17 @@ def main() -> int:
                 # replay from existing judgments
                 continue
             try:
-                correct = judge_one(anth, judge_model, gold_q.get("question", ""), gold, h.get("hypothesis", ""), qtype)
-            except anthropic.APIError as e:
+                if provider == "openai":
+                    assert oai is not None
+                    correct = judge_one_openai(
+                        oai, judge_model, gold_q.get("question", ""), gold, h.get("hypothesis", ""), qtype,
+                    )
+                else:
+                    assert anth is not None
+                    correct = judge_one_anthropic(
+                        anth, judge_model, gold_q.get("question", ""), gold, h.get("hypothesis", ""), qtype,
+                    )
+            except (anthropic.APIError, OpenAIAPIError) as e:
                 print(f"[{qid}] judge failed: {e}", file=sys.stderr)
                 continue
 
@@ -175,6 +276,7 @@ def main() -> int:
     report = {
         "hypotheses_file": str(hypo_path),
         "dataset": str(dataset_path),
+        "judge_provider": provider,
         "judge_model": judge_model,
         "overall": {
             "correct": total_correct,

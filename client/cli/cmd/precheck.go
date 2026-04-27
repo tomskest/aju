@@ -22,15 +22,16 @@ const preCheckInterval = 24 * time.Hour
 // check. Anything network-sensitive, low-signal, or recursive with the
 // check itself belongs here.
 var skipPreCheckCmds = map[string]struct{}{
-	"version":   {},
-	"--version": {},
-	"-v":        {},
-	"help":      {},
-	"--help":    {},
-	"-h":        {},
-	"update":    {},
-	"news":      {},
-	"doctor":    {},
+	"version":     {},
+	"--version":   {},
+	"-v":          {},
+	"help":        {},
+	"--help":      {},
+	"-h":          {},
+	"update":      {},
+	"self-update": {},
+	"news":        {},
+	"doctor":      {},
 }
 
 // ErrOutdatedUnsupported is returned to signal main() that the running CLI is
@@ -90,7 +91,7 @@ func PreDispatch(commandName string) error {
 	if m.MinSupportedVersion != "" && m.MinSupportedVersion != "unknown" {
 		if manifest.CompareVersions(current, m.MinSupportedVersion) < 0 {
 			fmt.Fprintf(os.Stderr,
-				"Your CLI (%s) is no longer supported. Minimum supported version: %s.\nRun `aju update` to upgrade.\n",
+				"Your CLI (%s) is no longer supported. Minimum supported version: %s.\nRun `aju self-update` to upgrade.\n",
 				current, m.MinSupportedVersion,
 			)
 			return ErrOutdatedUnsupported
@@ -100,7 +101,7 @@ func PreDispatch(commandName string) error {
 	// Soft hint: newer version available.
 	if m.LatestVersion != "" && m.LatestVersion != "unknown" {
 		if manifest.CompareVersions(current, m.LatestVersion) < 0 {
-			fmt.Fprintf(os.Stderr, "Update available: %s (run `aju update`)\n", m.LatestVersion)
+			fmt.Fprintf(os.Stderr, "Update available: %s (run `aju self-update`)\n", m.LatestVersion)
 		}
 	}
 

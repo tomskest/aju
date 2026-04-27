@@ -39,12 +39,16 @@ async function resolveOrgId(auth: AuthSuccess): Promise<string | null> {
 
 /**
  * Resolve a brain by id for the caller, along with the caller's effective
- * role. Access is granted when the caller has a BrainAccess row OR is a
- * member of the org that owns this tenant DB (control-plane check).
- * Returns null for access denied / missing.
+ * role. Access is granted when the caller has a BrainAccess row OR — for
+ * `type: "org"` brains only — is a member of the org that owns this tenant
+ * DB (control-plane check). Returns null for access denied / missing.
  *
- * An org membership with no explicit BrainAccess row is surfaced as a
- * "viewer" role so the detail view renders.
+ * Personal brains are owner-private: only callers with an explicit
+ * BrainAccess row see them, even when sharing an org membership with the
+ * owner.
+ *
+ * An org-membership-driven view of a `type: "org"` brain surfaces as
+ * "editor" so members can read and write without per-brain provisioning.
  */
 async function loadAccessibleBrain(
   tx: TenantTx,
@@ -80,8 +84,11 @@ async function loadAccessibleBrain(
     return { brain, role: access.role, hasExplicitAccess: true };
   }
 
-  // Fall back to an org-level check so members of the brain's org can view it
-  // even without a direct BrainAccess row. They're treated as viewers.
+  // Fall back to an org-level check so members of the brain's org can view
+  // org-type brains without a direct BrainAccess row. Personal brains stay
+  // private to their owner regardless of shared org membership.
+  if (brain.type !== "org") return null;
+
   const membership = await prisma.organizationMembership.findFirst({
     where: {
       userId: auth.userId!,
@@ -90,7 +97,7 @@ async function loadAccessibleBrain(
     select: { id: true },
   });
   if (membership) {
-    return { brain, role: "viewer" as const, hasExplicitAccess: false };
+    return { brain, role: "editor" as const, hasExplicitAccess: false };
   }
 
   return null;

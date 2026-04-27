@@ -36,10 +36,13 @@ Graph:
   changes               Show recent changes (--since, --exclude-source, --limit; --brain a,b or all)
 
 Brains:
-  brains list           List brains accessible to the active profile (active marked with *)
-  brains create <name>  Create a brain in the active org (--type personal|org)
-  brains delete <name>  Delete a brain (confirms; --yes to skip). Refuses to delete your only owned brain.
-  brains switch <name>  Switch the active brain (writes ~/.aju/config.json)
+  brains list                    List brains accessible to the active profile (active marked with *)
+  brains create <name>           Create a brain in the active org (--type personal|org)
+  brains delete <name>           Delete a brain (confirms; --yes to skip). Refuses to delete your only owned brain.
+  brains switch <name>           Switch the active brain (writes ~/.aju/config.json)
+  brains share <name> <email>    Grant a user access to a brain (--role viewer|editor|owner). Owner-only.
+  brains unshare <name> <email>  Revoke a user's access. Owner-only.
+  brains members <name>          List explicit user grants on a brain.
 
 Organizations:
   orgs list             List organizations (marks active with *)
@@ -90,7 +93,7 @@ Server integrations:
   mcp serve             Run MCP server (not implemented yet)
 
 Self-management:
-  update                Update the CLI binary (--force to reinstall)
+  self-update           Update the CLI binary (--force to reinstall)
   news                  Show product announcements (--all to replay seen)
   doctor                Diagnose local environment and connectivity
   export [-o path]      Download a portable JSON export of your data

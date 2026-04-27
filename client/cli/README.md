@@ -45,6 +45,7 @@ Working:
 - `aju create <path>` — create a note from stdin
 - `aju update <path>` — update a note from stdin
 - `aju delete <path>` — delete a note (prompts for confirmation)
+- `aju self-update` — update the CLI binary in place
 - `aju backlinks <path>` / `aju related <path>`
 - `aju graph [--mode stats|neighbors] [--path <p>]`
 - `aju brains list` / `aju brains switch <name>`
@@ -54,7 +55,6 @@ Working:
 
 Stubbed (not implemented yet):
 
-- `aju update` (no args — CLI self-update)
 - `aju news`
 - `aju doctor`
 - `aju mcp serve`

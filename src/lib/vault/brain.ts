@@ -60,18 +60,38 @@ export async function resolveBrain(
         },
         include: { brain: true },
       });
-      if (!access) {
-        return NextResponse.json(
-          { error: `Brain not found or access denied: ${requestedBrain}` },
-          { status: 403 },
-        );
+      if (access) {
+        return {
+          brainId: access.brain.id,
+          brainName: access.brain.name,
+          brainType: access.brain.type,
+          accessRole: access.role,
+        };
       }
-      return {
-        brainId: access.brain.id,
-        brainName: access.brain.name,
-        brainType: access.brain.type,
-        accessRole: access.role,
-      };
+
+      // Org-fallback: a `type: "org"` brain visible to the caller via
+      // organization membership (RLS-scoped through `app.current_brain_ids`,
+      // populated by resolveTenantAccess). Personal brains never reach this
+      // branch because the type filter excludes them. Members get editor
+      // access — org brains are shared workspaces, not read-only views.
+      const orgBrain = !auth?.agentId
+        ? await tenant.brain.findFirst({
+            where: { name: requestedBrain, type: "org" },
+          })
+        : null;
+      if (orgBrain) {
+        return {
+          brainId: orgBrain.id,
+          brainName: orgBrain.name,
+          brainType: orgBrain.type,
+          accessRole: "editor",
+        };
+      }
+
+      return NextResponse.json(
+        { error: `Brain not found or access denied: ${requestedBrain}` },
+        { status: 403 },
+      );
     }
 
     const brain = await tenant.brain.findFirst({
@@ -104,19 +124,38 @@ export async function resolveBrain(
         include: { brain: true },
         orderBy: { createdAt: "asc" },
       }));
-    if (!chosen) {
-      const subject = auth?.agentId ? "this agent" : "this user";
-      return NextResponse.json(
-        { error: `No brain configured for ${subject}` },
-        { status: 404 },
-      );
+    if (chosen) {
+      return {
+        brainId: chosen.brain.id,
+        brainName: chosen.brain.name,
+        brainType: chosen.brain.type,
+        accessRole: chosen.role,
+      };
     }
-    return {
-      brainId: chosen.brain.id,
-      brainName: chosen.brain.name,
-      brainType: chosen.brain.type,
-      accessRole: chosen.role,
-    };
+
+    // No explicit access. For human principals, default-pick any `type: "org"`
+    // brain reachable via org-fallback. RLS ensures only accessible brains
+    // surface here.
+    if (!auth?.agentId) {
+      const orgBrain = await tenant.brain.findFirst({
+        where: { type: "org" },
+        orderBy: { createdAt: "asc" },
+      });
+      if (orgBrain) {
+        return {
+          brainId: orgBrain.id,
+          brainName: orgBrain.name,
+          brainType: orgBrain.type,
+          accessRole: "editor",
+        };
+      }
+    }
+
+    const subject = auth?.agentId ? "this agent" : "this user";
+    return NextResponse.json(
+      { error: `No brain configured for ${subject}` },
+      { status: 404 },
+    );
   }
 
   const defaultBrain =
@@ -140,8 +179,12 @@ export async function resolveBrain(
 
 /**
  * All brain IDs the caller can access in the given tenant DB.
- * For authenticated users, via BrainAccess. For env-var callers, every brain
- * in the tenant (single-tenant admin path).
+ *
+ * Inside a `withTenant` scope, RLS pins `app.current_brain_ids` to the
+ * caller's accessible set (BrainAccess + org-fallback for human members of
+ * `type: "org"` brains). Listing brains directly therefore yields exactly
+ * the rows the caller may read. Env-var / legacy callers fall back to the
+ * full tenant list (single-tenant admin path).
  */
 export async function resolveAccessibleBrainIds(
   tenant: TenantReader,
@@ -149,11 +192,8 @@ export async function resolveAccessibleBrainIds(
 ): Promise<string[]> {
   const principal = principalAccessFilter(auth);
   if (principal) {
-    const accesses = await tenant.brainAccess.findMany({
-      where: principal,
-      select: { brainId: true },
-    });
-    return accesses.map((a) => a.brainId);
+    const brains = await tenant.brain.findMany({ select: { id: true } });
+    return brains.map((b) => b.id);
   }
 
   const allBrains = await tenant.brain.findMany({ select: { id: true } });
@@ -234,7 +274,38 @@ export async function resolveBrainIds(
       },
       include: { brain: true },
     });
-    const byName = new Map(accesses.map((a) => [a.brain.name, a]));
+    const byName = new Map<string, BrainContext>(
+      accesses.map((a) => [
+        a.brain.name,
+        {
+          brainId: a.brain.id,
+          brainName: a.brain.name,
+          brainType: a.brain.type,
+          accessRole: a.role,
+        },
+      ]),
+    );
+
+    // Org-fallback for human principals: fill any name without explicit
+    // BrainAccess by looking up a `type: "org"` brain visible via
+    // organization membership (RLS-scoped).
+    if (!auth?.agentId) {
+      const stillMissing = wanted.filter((n) => !byName.has(n));
+      if (stillMissing.length > 0) {
+        const orgBrains = await tenant.brain.findMany({
+          where: { name: { in: stillMissing }, type: "org" },
+        });
+        for (const b of orgBrains) {
+          byName.set(b.name, {
+            brainId: b.id,
+            brainName: b.name,
+            brainType: b.type,
+            accessRole: "editor",
+          });
+        }
+      }
+    }
+
     const missing = wanted.filter((n) => !byName.has(n));
     if (missing.length > 0) {
       return NextResponse.json(
@@ -244,15 +315,7 @@ export async function resolveBrainIds(
         { status: 403 },
       );
     }
-    return wanted.map((n) => {
-      const a = byName.get(n)!;
-      return {
-        brainId: a.brain.id,
-        brainName: a.brain.name,
-        brainType: a.brain.type,
-        accessRole: a.role,
-      };
-    });
+    return wanted.map((n) => byName.get(n)!);
   }
 
   const brains = await tenant.brain.findMany({
@@ -295,10 +358,15 @@ async function loadBrainContexts(
     });
     roleById = new Map(accesses.map((a) => [a.brainId, a.role]));
   }
+  // Without an explicit BrainAccess row, an authenticated principal can only
+  // be reaching this brain through the org-membership fallback. Org brains
+  // are shared workspaces, so members default to editor. Env-var callers
+  // (no principal) are admin-equivalent and also default to editor.
+  const defaultRole = "editor";
   return brains.map((b) => ({
     brainId: b.id,
     brainName: b.name,
     brainType: b.type,
-    accessRole: roleById.get(b.id) ?? "editor",
+    accessRole: roleById.get(b.id) ?? defaultRole,
   }));
 }

@@ -139,13 +139,18 @@ def answer_with_claude(
     retrieved: list[dict[str, Any]],
 ) -> str:
     prompt = build_answer_prompt(question, retrieved)
-    msg = client.messages.create(
-        model=model,
-        max_tokens=512,
-        temperature=0.0,
-        system=ANSWERER_SYSTEM,
-        messages=[{"role": "user", "content": prompt}],
-    )
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "max_tokens": 512,
+        "system": ANSWERER_SYSTEM,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    # Opus 4.x family deprecated the `temperature` parameter; passing it
+    # returns a 400. Older Sonnet/Haiku models still accept it and we want
+    # determinism there.
+    if not model.startswith("claude-opus-4"):
+        kwargs["temperature"] = 0.0
+    msg = client.messages.create(**kwargs)
     parts = [b.text for b in msg.content if getattr(b, "type", None) == "text"]
     return "".join(parts).strip()
 

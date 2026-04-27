@@ -232,6 +232,199 @@ func findBrainIDByName(brains []brainSummary, name string) string {
 	return ""
 }
 
+type brainMember struct {
+	AccessID  string `json:"accessId"`
+	UserID    string `json:"userId"`
+	Email     string `json:"email"`
+	Name      string `json:"name"`
+	Role      string `json:"role"`
+	GrantedAt string `json:"grantedAt"`
+}
+
+type brainMembersResp struct {
+	Brain struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+		Type string `json:"type"`
+	} `json:"brain"`
+	Members []brainMember `json:"members"`
+}
+
+// resolveBrainID looks up a brain id by name from the listing endpoint.
+// Returns a friendly error if the brain isn't visible to the caller.
+func resolveBrainID(client *httpx.Client, name string) (string, error) {
+	var list brainsListResp
+	if err := client.Get("/api/brains", &list); err != nil {
+		return "", printFriendlyErr(err)
+	}
+	id := findBrainIDByName(list.Brains, name)
+	if id == "" {
+		return "", fmt.Errorf("no brain named %q", name)
+	}
+	return id, nil
+}
+
+// BrainsShare grants a user explicit access to a brain.
+func BrainsShare(args []string) error {
+	fs := flag.NewFlagSet("brains share", flag.ContinueOnError)
+	role := fs.String("role", "editor", "role to grant: viewer | editor | owner")
+	setLeafUsage(fs, leafHelp{
+		Summary: "Grant a user access to a brain.",
+		Usage:   "aju brains share <name> <email> [--role viewer|editor|owner]",
+		Long: `Adds (or updates) a user's BrainAccess row on this brain. The target user
+must already be a member of the brain's organization. Owner-only.
+
+For org brains, every org member already has editor access through membership;
+sharing only matters when you want to promote someone to owner or override
+their role for that brain. For personal brains, sharing is the only way to
+grant access without making the brain org-wide.`,
+		Examples: []string{
+			"aju brains share my-notes teammate@example.com",
+			"aju brains share my-notes teammate@example.com --role viewer",
+			"aju brains share research lead@example.com --role owner",
+		},
+	})
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	if fs.NArg() < 2 {
+		return errors.New("usage: aju brains share <name> <email> [--role viewer|editor|owner]")
+	}
+	name := fs.Arg(0)
+	email := fs.Arg(1)
+
+	client, _, err := loadAuthedClient()
+	if err != nil {
+		return err
+	}
+	id, err := resolveBrainID(client, name)
+	if err != nil {
+		return err
+	}
+
+	body := map[string]any{"email": email, "role": *role}
+	var resp struct {
+		OK      bool `json:"ok"`
+		Updated bool `json:"updated"`
+		Grant   struct {
+			Role string `json:"role"`
+		} `json:"grant"`
+	}
+	if err := client.Post("/api/brains/"+id+"/access", body, &resp); err != nil {
+		return printFriendlyErr(err)
+	}
+	verb := "Granted"
+	if resp.Updated {
+		verb = "Updated"
+	}
+	fmt.Printf("%s %s as %s on %s\n", verb, email, resp.Grant.Role, name)
+	return nil
+}
+
+// BrainsUnshare revokes a user's access to a brain.
+func BrainsUnshare(args []string) error {
+	fs := flag.NewFlagSet("brains unshare", flag.ContinueOnError)
+	setLeafUsage(fs, leafHelp{
+		Summary: "Revoke a user's access to a brain.",
+		Usage:   "aju brains unshare <name> <email>",
+		Long: `Removes the user's explicit BrainAccess row. For org brains, the user may
+still have implicit editor access via org membership — that's gated at the
+org level, not per-brain. Refuses to remove the last owner. Owner-only.`,
+		Examples: []string{
+			"aju brains unshare my-notes teammate@example.com",
+		},
+	})
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	if fs.NArg() < 2 {
+		return errors.New("usage: aju brains unshare <name> <email>")
+	}
+	name := fs.Arg(0)
+	email := fs.Arg(1)
+
+	client, _, err := loadAuthedClient()
+	if err != nil {
+		return err
+	}
+	id, err := resolveBrainID(client, name)
+	if err != nil {
+		return err
+	}
+
+	// Look up userId by listing members — the DELETE route is keyed by userId,
+	// not email, since email is mutable in the control DB.
+	var members brainMembersResp
+	if err := client.Get("/api/brains/"+id+"/access", &members); err != nil {
+		return printFriendlyErr(err)
+	}
+	target := ""
+	for _, m := range members.Members {
+		if strings.EqualFold(m.Email, email) {
+			target = m.UserID
+			break
+		}
+	}
+	if target == "" {
+		return fmt.Errorf("%s has no explicit access to %s", email, name)
+	}
+
+	if err := client.Do("DELETE", "/api/brains/"+id+"/access/"+target, nil, nil); err != nil {
+		if he := asHTTPError(err); he != nil && he.Status == 409 &&
+			strings.Contains(he.Body, "cannot_remove_last_owner") {
+			fmt.Fprintln(os.Stderr,
+				"Refused: this is the last owner — promote someone else to owner first.")
+			return ErrSilent
+		}
+		return printFriendlyErr(err)
+	}
+	fmt.Printf("Revoked %s from %s\n", email, name)
+	return nil
+}
+
+// BrainsMembers prints the user-backed BrainAccess rows for a brain.
+func BrainsMembers(args []string) error {
+	fs := flag.NewFlagSet("brains members", flag.ContinueOnError)
+	setLeafUsage(fs, leafHelp{
+		Summary: "List explicit members of a brain.",
+		Usage:   "aju brains members <name>",
+		Long: `Shows users with explicit BrainAccess rows on this brain (one row per role).
+Agent grants surface via 'aju agents show' instead. Org-level membership-
+based access does NOT appear here — those are implicit, not per-brain rows.
+Owner-only.`,
+		Examples: []string{"aju brains members my-notes"},
+	})
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	if fs.NArg() < 1 {
+		return errors.New("usage: aju brains members <name>")
+	}
+	name := fs.Arg(0)
+
+	client, _, err := loadAuthedClient()
+	if err != nil {
+		return err
+	}
+	id, err := resolveBrainID(client, name)
+	if err != nil {
+		return err
+	}
+
+	var resp brainMembersResp
+	if err := client.Get("/api/brains/"+id+"/access", &resp); err != nil {
+		return printFriendlyErr(err)
+	}
+	if len(resp.Members) == 0 {
+		fmt.Fprintln(os.Stderr, "No explicit members.")
+		return nil
+	}
+	for _, m := range resp.Members {
+		fmt.Printf("%s\t%s\t%s\n", m.Email, m.Role, m.Name)
+	}
+	return nil
+}
+
 // confirmDeletion asks the user to type the brain name before proceeding.
 // Input is read from stdin; EOF on a pipe counts as "not confirmed".
 func confirmDeletion(name string) (bool, error) {

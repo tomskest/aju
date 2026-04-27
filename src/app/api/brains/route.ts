@@ -36,9 +36,16 @@ async function resolveOrgId(
 /**
  * GET /api/brains
  *
- * List every brain the caller has BrainAccess for, with document count and
- * the caller's role. Ordered by createdAt asc so the default brain surfaces
- * first.
+ * List every brain the caller can see, with document count and the caller's
+ * effective role. Includes:
+ *   - explicit BrainAccess rows (role from the row)
+ *   - any `type: "org"` brain in the caller's pinned org if they're a member
+ *     and lack an explicit row (role: "editor")
+ *
+ * Personal brains require an explicit BrainAccess row regardless of org
+ * membership. Agents never get the org-fallback.
+ *
+ * Ordered by createdAt asc so the default brain surfaces first.
  */
 export async function GET(req: NextRequest) {
   const auth = await authenticate(req);
@@ -75,14 +82,57 @@ export async function GET(req: NextRequest) {
         orderBy: { brain: { createdAt: "asc" } },
       });
 
-      const brains = access.map((a) => ({
-        id: a.brain.id,
-        name: a.brain.name,
-        type: a.brain.type,
-        documentCount: a.brain._count.documents,
-        role: a.role,
-        createdAt: a.brain.createdAt.toISOString(),
-      }));
+      type BrainRow = {
+        id: string;
+        name: string;
+        type: string;
+        documentCount: number;
+        role: string;
+        createdAt: string;
+      };
+      const byId = new Map<string, BrainRow>();
+      for (const a of access) {
+        byId.set(a.brain.id, {
+          id: a.brain.id,
+          name: a.brain.name,
+          type: a.brain.type,
+          documentCount: a.brain._count.documents,
+          role: a.role,
+          createdAt: a.brain.createdAt.toISOString(),
+        });
+      }
+
+      // Org-fallback: pull every type:"org" brain in the tenant and surface
+      // any the caller doesn't already have explicit access to as viewer.
+      // Skipped for agent principals — they require an explicit grant.
+      if (!auth.agentId) {
+        const isMember = await prisma.organizationMembership.findFirst({
+          where: { userId: auth.userId, organizationId },
+          select: { id: true },
+        });
+        if (isMember) {
+          const orgBrains = await tx.brain.findMany({
+            where: { type: "org" },
+            include: { _count: { select: { documents: true } } },
+            orderBy: { createdAt: "asc" },
+          });
+          for (const b of orgBrains) {
+            if (byId.has(b.id)) continue;
+            byId.set(b.id, {
+              id: b.id,
+              name: b.name,
+              type: b.type,
+              documentCount: b._count.documents,
+              role: "editor",
+              createdAt: b.createdAt.toISOString(),
+            });
+          }
+        }
+      }
+
+      const brains = [...byId.values()].sort((a, b) =>
+        a.createdAt.localeCompare(b.createdAt),
+      );
 
       return NextResponse.json({ brains });
     },

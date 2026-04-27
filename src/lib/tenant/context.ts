@@ -20,7 +20,7 @@
  */
 
 import type { Prisma as PrismaTenant } from "@prisma/client-tenant";
-import { tenantDbFor, type PrismaClientTenant } from "@/lib/db";
+import { prisma, tenantDbFor, type PrismaClientTenant } from "@/lib/db";
 
 type TenantTx = PrismaTenant.TransactionClient;
 
@@ -89,6 +89,12 @@ export async function setBrainContextOnTx(
 /**
  * Resolve the tenant client for an org and list the brain ids the given
  * user (or agent) can see. This is the read side that feeds withBrainContext.
+ *
+ * Human members of `orgId` get implicit viewer access to every `type: "org"`
+ * brain in the tenant, in addition to any explicit BrainAccess grants.
+ * Personal brains stay private — only their owners (or anyone with an
+ * explicit BrainAccess row) see them. Agent principals never get the
+ * fallback: agents only see brains explicitly granted to them.
  */
 export async function resolveTenantAccess(
   orgId: string,
@@ -110,8 +116,23 @@ export async function resolveTenantAccess(
     where,
     select: { brainId: true },
   });
-  const brainIds = [...new Set(rows.map((r) => r.brainId))];
-  return { tenant, brainIds };
+  const ids = new Set(rows.map((r) => r.brainId));
+
+  if (actor.userId && !actor.agentId) {
+    const membership = await prisma.organizationMembership.findFirst({
+      where: { userId: actor.userId, organizationId: orgId },
+      select: { id: true },
+    });
+    if (membership) {
+      const orgBrains = await tenant.brain.findMany({
+        where: { type: "org" },
+        select: { id: true },
+      });
+      for (const b of orgBrains) ids.add(b.id);
+    }
+  }
+
+  return { tenant, brainIds: [...ids] };
 }
 
 /**

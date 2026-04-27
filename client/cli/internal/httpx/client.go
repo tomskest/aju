@@ -56,6 +56,17 @@ func IsAuth(err error) bool {
 	return e.Kind == ErrHTTP && (e.Status == http.StatusUnauthorized || e.Status == http.StatusForbidden)
 }
 
+// IsConflict reports whether err represents an HTTP 409. Used by callers
+// implementing compare-and-swap flows (aju update --base-hash) so they
+// can branch on conflict without string-matching the error.
+func IsConflict(err error) bool {
+	var e *Error
+	if !errors.As(err, &e) {
+		return false
+	}
+	return e.Kind == ErrHTTP && e.Status == http.StatusConflict
+}
+
 // IsNetwork reports whether err represents a connectivity failure.
 func IsNetwork(err error) bool {
 	var e *Error
@@ -125,7 +136,8 @@ func (c *Client) Do(method, path string, body any, out any) error {
 	}
 
 	if resp.StatusCode >= 400 {
-		snippet := strings.TrimSpace(string(raw))
+		full := strings.TrimSpace(string(raw))
+		snippet := full
 		if len(snippet) > 256 {
 			snippet = snippet[:256] + "..."
 		}
@@ -133,7 +145,10 @@ func (c *Client) Do(method, path string, body any, out any) error {
 			Kind:    ErrHTTP,
 			Status:  resp.StatusCode,
 			Message: fmt.Sprintf("http %d: %s", resp.StatusCode, snippet),
-			Body:    snippet,
+			// Preserve the full body so callers (e.g. the CAS conflict
+			// handler in `aju update`) can re-parse structured JSON
+			// fields like headContent that exceed the snippet cap.
+			Body: full,
 		}
 	}
 

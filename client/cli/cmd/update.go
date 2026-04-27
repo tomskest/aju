@@ -20,26 +20,30 @@ import (
 // selfUpdateTimeout bounds a single HTTP download within UpdateSelf.
 const selfUpdateTimeout = 5 * time.Minute
 
-// UpdateSelf is the implementation of `aju update` (with no args). It fetches
-// the manifest, compares the running version, downloads the new binary,
+// UpdateSelf is the implementation of `aju self-update`. It fetches the
+// manifest, compares the running version, downloads the new binary,
 // verifies it against the release checksums, and atomically replaces the
 // currently running executable.
+//
+// Bare `aju update` (no positional path) still dispatches here for
+// backwards compatibility, with a deprecation warning printed in main.
 func UpdateSelf(args []string) error {
-	fs := flag.NewFlagSet("update", flag.ContinueOnError)
+	fs := flag.NewFlagSet("self-update", flag.ContinueOnError)
 	force := fs.Bool("force", false, "reinstall even if already on the latest version")
 	installBase := fs.String("install-base", envOr("AJU_INSTALL_BASE", manifest.DefaultInstallBase), "override install worker URL")
 	setLeafUsage(fs, leafHelp{
 		Summary: "Update the CLI binary in place. Verified against release checksums.",
-		Usage:   "aju update [--force] [--install-base <url>]",
+		Usage:   "aju self-update [--force] [--install-base <url>]",
 		Long: `Fetches the manifest, compares against the running version, downloads
 the platform-matched binary, verifies its SHA-256 against the published
 checksums, and atomically replaces the running executable.
 
-Note: 'aju update <path>' (with a positional note path) dispatches instead
-to the vault-update command. This block is only for the self-update form.`,
+Note: 'aju update <path>' (with a positional note path) is the vault-update
+command — a different operation entirely. Bare 'aju update' is a deprecated
+alias for this command and will be removed in a future release.`,
 		Examples: []string{
-			"aju update",
-			"aju update --force",
+			"aju self-update",
+			"aju self-update --force",
 		},
 	})
 	if err := parseFlags(fs, args); err != nil {

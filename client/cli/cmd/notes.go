@@ -11,6 +11,8 @@ import (
 	"os"
 	"sort"
 	"strings"
+
+	"github.com/tomskest/aju/client/cli/internal/httpx"
 )
 
 // documentResponse mirrors the GET /api/vault/document payload. Fields beyond
@@ -20,7 +22,20 @@ type documentResponse struct {
 	Title       string         `json:"title,omitempty"`
 	Section     string         `json:"section,omitempty"`
 	Content     string         `json:"content"`
+	ContentHash string         `json:"contentHash,omitempty"`
 	Frontmatter map[string]any `json:"frontmatter,omitempty"`
+}
+
+// updateConflictBody is the structured 409 payload returned by
+// /api/vault/update when the supplied baseHash does not match the current
+// head. The CLI parses this so the user sees a readable conflict instead
+// of a raw HTTP error blob.
+type updateConflictBody struct {
+	Error       string `json:"error"`
+	Message     string `json:"message"`
+	HeadHash    string `json:"headHash"`
+	HeadContent string `json:"headContent"`
+	BaseHash    string `json:"baseHash"`
 }
 
 type browseResponse struct {
@@ -82,6 +97,12 @@ func Read(args []string) error {
 	if !strings.HasSuffix(doc.Content, "\n") {
 		fmt.Println()
 	}
+	// Surface the head hash on stderr so callers running interactively
+	// (or piping body to a file) can capture it for `aju update --base-hash`
+	// without polluting stdout. Suppressed under AJU_QUIET.
+	if doc.ContentHash != "" && os.Getenv("AJU_QUIET") != "1" {
+		fmt.Fprintf(os.Stderr, "head: %s\n", doc.ContentHash)
+	}
 	return nil
 }
 
@@ -138,40 +159,26 @@ func Browse(args []string) error {
 // Create implements `aju create <path>` — reads stdin and POSTs to
 // /api/vault/create.
 func Create(args []string) error {
-	return writeDoc("create", args, "/api/vault/create")
-}
-
-// UpdateNote implements the vault-update variant (not the self-update stub).
-// main.go dispatches to this when `update` has a path arg.
-func UpdateNote(args []string) error {
-	return writeDoc("update", args, "/api/vault/update")
-}
-
-func writeDoc(op string, args []string, endpoint string) error {
-	fs := flag.NewFlagSet(op, flag.ContinueOnError)
+	fs := flag.NewFlagSet("create", flag.ContinueOnError)
 	brain := fs.String("brain", "", "brain name (defaults to active brain)")
-	verb := "Create"
-	if op == "update" {
-		verb = "Update"
-	}
 	setLeafUsage(fs, leafHelp{
-		Summary: fmt.Sprintf("%s a note. Content is read from stdin.", verb),
-		Usage:   fmt.Sprintf("aju %s <path> [--brain <name>]", op),
+		Summary: "Create a note. Content is read from stdin.",
+		Usage:   "aju create <path> [--brain <name>]",
 		Long:    "Pipe content into stdin; running without a pipe is a user error and is rejected with a hint.",
 		Examples: []string{
-			fmt.Sprintf("echo '# Hello' | aju %s notes/hello.md", op),
-			fmt.Sprintf("cat draft.md | aju %s drafts/draft.md --brain Acme", op),
+			"echo '# Hello' | aju create notes/hello.md",
+			"cat draft.md | aju create drafts/draft.md --brain Acme",
 		},
 	})
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if fs.NArg() < 1 {
-		return fmt.Errorf("usage: aju %s <path> [--brain <name>] (content via stdin)", op)
+		return errors.New("usage: aju create <path> [--brain <name>] (content via stdin)")
 	}
 	path := fs.Arg(0)
 
-	content, err := readStdinContent(op)
+	content, err := readStdinContent("create")
 	if err != nil {
 		return err
 	}
@@ -186,12 +193,9 @@ func writeDoc(op string, args []string, endpoint string) error {
 		"content": content,
 		"source":  "aju-cli",
 	}
+	target := "/api/vault/create"
 	if b := resolveBrainFlag(*brain, cfg); b != "" {
 		body["brain"] = b
-	}
-	// brain also goes on the query string — that's what the server consults.
-	target := endpoint
-	if b := resolveBrainFlag(*brain, cfg); b != "" {
 		target += "?brain=" + url.QueryEscape(b)
 	}
 
@@ -199,12 +203,119 @@ func writeDoc(op string, args []string, endpoint string) error {
 	if err := client.PostJSON(target, body, &resp); err != nil {
 		return printFriendlyErr(err)
 	}
-	if op == "create" {
-		fmt.Printf("Created %s\n", path)
-	} else {
-		fmt.Printf("Updated %s\n", path)
-	}
+	fmt.Printf("Created %s\n", path)
 	return nil
+}
+
+// UpdateNote implements `aju update <path>` — the vault-note update command.
+// main.go dispatches here when `update` has a positional path argument.
+// The CLI binary self-update lives at `aju self-update` (cmd.UpdateSelf).
+//
+// CAS protocol:
+//
+//   - Pass `--base-hash <hash>` (the head hash printed by `aju read`) to
+//     enable the server's compare-and-swap. If another writer has touched
+//     the doc since you read it, the server returns 409 and the CLI
+//     prints a structured conflict message so you can re-read and retry.
+//   - `--force` skips the CAS check entirely (legacy force-write).
+//   - If neither flag is set, the server falls back to legacy with a
+//     Deprecation header. A future release will require one of the two.
+func UpdateNote(args []string) error {
+	fs := flag.NewFlagSet("update", flag.ContinueOnError)
+	brain := fs.String("brain", "", "brain name (defaults to active brain)")
+	baseHash := fs.String("base-hash", "", "head hash of the version you're editing (from `aju read`)")
+	force := fs.Bool("force", false, "skip the compare-and-swap check (overwrite whatever is there)")
+	setLeafUsage(fs, leafHelp{
+		Summary: "Update a note. Content is read from stdin.",
+		Usage:   "aju update <path> [--base-hash <hash>] [--force] [--brain <name>]",
+		Long: `Pipe content into stdin; running without a pipe is a user error and is
+rejected with a hint.
+
+The server uses --base-hash to detect concurrent edits. Capture the hash
+from a prior 'aju read' (printed to stderr as 'head: <hash>') and pass
+it on update. On hash mismatch the server returns 409 with the current
+head; re-read, re-apply your edit, and retry.
+
+--force overrides this and writes unconditionally. Without --base-hash
+or --force the request falls back to legacy force-write and the server
+returns a Deprecation header.`,
+		Examples: []string{
+			"cat draft.md | aju update notes/hello.md --base-hash 9f3a...",
+			"cat draft.md | aju update notes/hello.md --force",
+		},
+	})
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	if fs.NArg() < 1 {
+		return errors.New("usage: aju update <path> [--base-hash <hash>] [--force] [--brain <name>] (content via stdin)")
+	}
+	path := fs.Arg(0)
+
+	content, err := readStdinContent("update")
+	if err != nil {
+		return err
+	}
+
+	if *baseHash != "" && *force {
+		return errors.New("--base-hash and --force are mutually exclusive")
+	}
+
+	client, cfg, err := loadAuthedClient()
+	if err != nil {
+		return err
+	}
+
+	body := map[string]any{
+		"path":    path,
+		"content": content,
+		"source":  "aju-cli",
+	}
+	if *baseHash != "" {
+		body["baseHash"] = *baseHash
+	}
+	target := "/api/vault/update"
+	if b := resolveBrainFlag(*brain, cfg); b != "" {
+		body["brain"] = b
+		target += "?brain=" + url.QueryEscape(b)
+	}
+
+	var resp map[string]any
+	if err := client.PostJSON(target, body, &resp); err != nil {
+		// Surface a structured conflict on 409 so the user sees the
+		// current head hash and can retry without grepping the raw body.
+		if httpx.IsConflict(err) {
+			return printUpdateConflict(err, path)
+		}
+		return printFriendlyErr(err)
+	}
+	fmt.Printf("Updated %s\n", path)
+	return nil
+}
+
+// printUpdateConflict decodes the 409 body from /api/vault/update and writes
+// a readable explanation to stderr. Returns ErrSilent so main.exitWith
+// doesn't double-print the underlying httpx.Error.
+func printUpdateConflict(err error, path string) error {
+	var hErr *httpx.Error
+	if !errors.As(err, &hErr) {
+		return err
+	}
+	var body updateConflictBody
+	_ = json.Unmarshal([]byte(hErr.Body), &body)
+
+	fmt.Fprintf(os.Stderr, "Conflict: %s has changed since your read.\n", path)
+	if body.Message != "" {
+		fmt.Fprintf(os.Stderr, "  %s\n", body.Message)
+	}
+	if body.BaseHash != "" {
+		fmt.Fprintf(os.Stderr, "  your base: %s\n", body.BaseHash)
+	}
+	if body.HeadHash != "" {
+		fmt.Fprintf(os.Stderr, "  current:   %s\n", body.HeadHash)
+	}
+	fmt.Fprintln(os.Stderr, "Run `aju read "+path+"` again, re-apply your edit, then retry with the new --base-hash.")
+	return ErrSilent
 }
 
 // Delete implements `aju delete <path>` with a confirmation prompt.

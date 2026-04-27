@@ -97,8 +97,8 @@ const CLI_STEPS: Step[] = [
       <p className="text-[13px] leading-6 text-[var(--color-muted)]">
         Pipe any markdown file in and aju parses frontmatter, extracts
         wikilinks, and generates embeddings in the background. Use{" "}
-        <span className="font-mono">aju update</span> and{" "}
-        <span className="font-mono">aju delete</span> for later edits.
+        <span className="font-mono">aju update &lt;path&gt;</span> and{" "}
+        <span className="font-mono">aju delete &lt;path&gt;</span> for later edits.
       </p>
     ),
   },

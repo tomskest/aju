@@ -21,8 +21,8 @@ type BrainRole = "owner" | "editor" | "viewer";
 /**
  * Resolve a brain the caller can see inside a given tenant DB. Callers with
  * an explicit BrainAccess row get their real role; members of the brain's
- * org without a BrainAccess row are treated as viewers so the detail page
- * still renders.
+ * org get editor access to `type: "org"` brains via the membership fallback.
+ * Personal brains stay private to their owner.
  */
 async function loadAccessibleBrain(
   tenant: PrismaClientTenant,
@@ -45,12 +45,14 @@ async function loadAccessibleBrain(
     return { brain, role: access.role as BrainRole };
   }
 
+  if (brain.type !== "org") return null;
+
   const membership = await prisma.organizationMembership.findFirst({
     where: { userId, organizationId },
     select: { id: true },
   });
   if (membership) {
-    return { brain, role: "viewer" as BrainRole };
+    return { brain, role: "editor" as BrainRole };
   }
 
   return null;
@@ -94,6 +96,176 @@ async function renameBrainAction(formData: FormData): Promise<void> {
   revalidatePath(`/app/brains/${brainId}`, "layout");
   revalidatePath("/app/brains", "layout");
   redirect(`/app/brains/${brainId}?ok=renamed`);
+}
+
+const GRANT_ROLES: readonly BrainRole[] = ["viewer", "editor", "owner"];
+
+function isGrantRole(s: string): s is BrainRole {
+  return (GRANT_ROLES as readonly string[]).includes(s);
+}
+
+async function inviteMemberAction(formData: FormData): Promise<void> {
+  "use server";
+  const user = await currentUser();
+  if (!user) redirect("/");
+
+  const brainId = (formData.get("brainId") as string | null) ?? "";
+  if (!brainId) return;
+  const organizationId = await getActiveOrganizationId();
+  if (!organizationId) notFound();
+
+  const tenant = await tenantDbFor(organizationId!);
+  const loaded = await loadAccessibleBrain(
+    tenant,
+    user.id,
+    organizationId!,
+    brainId,
+  );
+  if (!loaded) notFound();
+  if (loaded.role !== "owner") {
+    redirect(`/app/brains/${brainId}?error=forbidden`);
+  }
+
+  const email = ((formData.get("email") as string | null) ?? "")
+    .trim()
+    .toLowerCase();
+  if (!email) {
+    redirect(`/app/brains/${brainId}?error=email-required`);
+  }
+  const rawRole = ((formData.get("role") as string | null) ?? "editor").trim();
+  if (!isGrantRole(rawRole)) {
+    redirect(`/app/brains/${brainId}?error=invalid-role`);
+  }
+  const role = rawRole;
+
+  const target = await prisma.user.findUnique({
+    where: { email },
+    select: { id: true },
+  });
+  if (!target) {
+    redirect(`/app/brains/${brainId}?error=user-not-found`);
+  }
+
+  const targetMembership = await prisma.organizationMembership.findFirst({
+    where: { userId: target!.id, organizationId: organizationId! },
+    select: { id: true },
+  });
+  if (!targetMembership) {
+    redirect(`/app/brains/${brainId}?error=user-not-in-org`);
+  }
+
+  await tenant.brainAccess.upsert({
+    where: { brainId_userId: { brainId, userId: target!.id } },
+    create: { brainId, userId: target!.id, role },
+    update: { role },
+  });
+
+  revalidatePath(`/app/brains/${brainId}`, "layout");
+  redirect(`/app/brains/${brainId}?ok=member-added`);
+}
+
+async function updateMemberRoleAction(formData: FormData): Promise<void> {
+  "use server";
+  const user = await currentUser();
+  if (!user) redirect("/");
+
+  const brainId = (formData.get("brainId") as string | null) ?? "";
+  const targetUserId = (formData.get("userId") as string | null) ?? "";
+  if (!brainId || !targetUserId) return;
+
+  const organizationId = await getActiveOrganizationId();
+  if (!organizationId) notFound();
+
+  const tenant = await tenantDbFor(organizationId!);
+  const loaded = await loadAccessibleBrain(
+    tenant,
+    user.id,
+    organizationId!,
+    brainId,
+  );
+  if (!loaded) notFound();
+  if (loaded.role !== "owner") {
+    redirect(`/app/brains/${brainId}?error=forbidden`);
+  }
+
+  const rawRole = ((formData.get("role") as string | null) ?? "").trim();
+  if (!isGrantRole(rawRole)) {
+    redirect(`/app/brains/${brainId}?error=invalid-role`);
+  }
+  const role = rawRole;
+
+  const existing = await tenant.brainAccess.findUnique({
+    where: { brainId_userId: { brainId, userId: targetUserId } },
+    select: { id: true, role: true },
+  });
+  if (!existing) {
+    redirect(`/app/brains/${brainId}?error=member-missing`);
+  }
+
+  // Last-owner guard mirrors the API.
+  if (existing!.role === "owner" && role !== "owner") {
+    const ownerCount = await tenant.brainAccess.count({
+      where: { brainId, role: "owner", userId: { not: null } },
+    });
+    if (ownerCount <= 1) {
+      redirect(`/app/brains/${brainId}?error=last-owner`);
+    }
+  }
+
+  await tenant.brainAccess.update({
+    where: { id: existing!.id },
+    data: { role },
+  });
+
+  revalidatePath(`/app/brains/${brainId}`, "layout");
+  redirect(`/app/brains/${brainId}?ok=member-updated`);
+}
+
+async function removeMemberAction(formData: FormData): Promise<void> {
+  "use server";
+  const user = await currentUser();
+  if (!user) redirect("/");
+
+  const brainId = (formData.get("brainId") as string | null) ?? "";
+  const targetUserId = (formData.get("userId") as string | null) ?? "";
+  if (!brainId || !targetUserId) return;
+
+  const organizationId = await getActiveOrganizationId();
+  if (!organizationId) notFound();
+
+  const tenant = await tenantDbFor(organizationId!);
+  const loaded = await loadAccessibleBrain(
+    tenant,
+    user.id,
+    organizationId!,
+    brainId,
+  );
+  if (!loaded) notFound();
+  if (loaded.role !== "owner") {
+    redirect(`/app/brains/${brainId}?error=forbidden`);
+  }
+
+  const existing = await tenant.brainAccess.findUnique({
+    where: { brainId_userId: { brainId, userId: targetUserId } },
+    select: { id: true, role: true },
+  });
+  if (!existing) {
+    redirect(`/app/brains/${brainId}?error=member-missing`);
+  }
+
+  if (existing!.role === "owner") {
+    const ownerCount = await tenant.brainAccess.count({
+      where: { brainId, role: "owner", userId: { not: null } },
+    });
+    if (ownerCount <= 1) {
+      redirect(`/app/brains/${brainId}?error=last-owner`);
+    }
+  }
+
+  await tenant.brainAccess.delete({ where: { id: existing!.id } });
+
+  revalidatePath(`/app/brains/${brainId}`, "layout");
+  redirect(`/app/brains/${brainId}?ok=member-removed`);
 }
 
 async function deleteBrainAction(formData: FormData): Promise<void> {
@@ -144,10 +316,20 @@ const ERROR_MESSAGES: Record<string, string> = {
   "name-too-long": `name must be ${NAME_MAX_LEN} characters or fewer.`,
   "confirm-mismatch": "the name you typed didn't match.",
   "last-brain": "can't delete your only owned brain — create another first.",
+  "email-required": "enter an email to invite.",
+  "invalid-role": "role must be viewer, editor, or owner.",
+  "user-not-found": "no user with that email exists.",
+  "user-not-in-org": "user must be a member of this org first.",
+  "member-missing": "that member is no longer on this brain.",
+  "last-owner":
+    "this is the last owner — promote someone else to owner first.",
 };
 
 const OK_MESSAGES: Record<string, string> = {
   renamed: "renamed.",
+  "member-added": "member added.",
+  "member-updated": "role updated.",
+  "member-removed": "member removed.",
 };
 
 function formatDate(d: Date | null | undefined): string {
@@ -323,10 +505,22 @@ export default async function BrainDetailPage({
             {members.length}
           </span>
         </div>
+
+        {brain.type === "org" && (
+          <p className="text-[12px] leading-6 text-[var(--color-muted)]">
+            This is an org brain — every member of{" "}
+            <span className="text-[var(--color-ink)]">
+              {organization?.slug ?? "the org"}
+            </span>{" "}
+            already has editor access. Use the list below to grant explicit
+            owner rights or override roles for specific people.
+          </p>
+        )}
+
         {members.length === 0 ? (
           <div className="rounded-xl border border-dashed border-white/10 bg-[var(--color-panel)]/60 p-6">
             <p className="text-[13px] text-[var(--color-muted)]">
-              No explicit members. Org members may still access this brain.
+              No explicit members yet.
             </p>
           </div>
         ) : (
@@ -335,7 +529,7 @@ export default async function BrainDetailPage({
               {members.map((m) => (
                 <li
                   key={m.id}
-                  className="grid grid-cols-1 gap-2 bg-[var(--color-panel)]/40 px-5 py-3 md:grid-cols-[1fr_120px] md:items-center md:gap-4"
+                  className="grid grid-cols-1 gap-3 bg-[var(--color-panel)]/40 px-5 py-3 md:grid-cols-[1fr_180px_auto] md:items-center md:gap-4"
                 >
                   <div className="flex flex-col gap-0.5">
                     <span className="font-mono text-[13px] text-[var(--color-ink)]">
@@ -347,13 +541,117 @@ export default async function BrainDetailPage({
                       </span>
                     )}
                   </div>
-                  <div className="md:text-right">
-                    <RoleBadge role={m.role as BrainRole} />
-                  </div>
+                  {canManage && m.user.id !== user.id ? (
+                    <form
+                      action={updateMemberRoleAction}
+                      className="flex items-center gap-2 md:justify-end"
+                    >
+                      <input type="hidden" name="brainId" value={brain.id} />
+                      <input type="hidden" name="userId" value={m.user.id} />
+                      <select
+                        name="role"
+                        defaultValue={m.role}
+                        className="rounded-md border border-white/10 bg-[var(--color-bg)]/60 px-2 py-1 font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--color-ink)] focus:border-white/20 focus:outline-none"
+                      >
+                        <option value="viewer">viewer</option>
+                        <option value="editor">editor</option>
+                        <option value="owner">owner</option>
+                      </select>
+                      <button
+                        type="submit"
+                        className="inline-flex items-center justify-center rounded-md border border-white/15 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--color-muted)] transition hover:border-white/30 hover:text-[var(--color-ink)]"
+                      >
+                        save
+                      </button>
+                    </form>
+                  ) : (
+                    <div className="md:text-right">
+                      <RoleBadge role={m.role as BrainRole} />
+                    </div>
+                  )}
+                  {canManage && m.user.id !== user.id ? (
+                    <form
+                      action={removeMemberAction}
+                      className="md:text-right"
+                    >
+                      <input type="hidden" name="brainId" value={brain.id} />
+                      <input type="hidden" name="userId" value={m.user.id} />
+                      <button
+                        type="submit"
+                        className="inline-flex items-center justify-center rounded-md border border-[var(--color-accent)]/30 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--color-accent)] transition hover:border-[var(--color-accent)]/60 hover:bg-[var(--color-accent)]/[0.08]"
+                      >
+                        remove
+                      </button>
+                    </form>
+                  ) : (
+                    <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--color-faint)] md:text-right">
+                      {m.user.id === user.id ? "you" : ""}
+                    </span>
+                  )}
                 </li>
               ))}
             </ul>
           </div>
+        )}
+
+        {canManage && (
+          <form
+            action={inviteMemberAction}
+            className="flex flex-col gap-3 rounded-xl border border-white/10 bg-[var(--color-panel)]/85 p-5"
+          >
+            <div className="flex items-baseline justify-between gap-3">
+              <h2 className="text-[15px] font-medium text-[var(--color-ink)]">
+                Invite member
+              </h2>
+              <span className="font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--color-faint)]">
+                owner only
+              </span>
+            </div>
+            <p className="text-[13px] leading-6 text-[var(--color-muted)]">
+              Grant a specific user access to this brain. The user must already
+              be a member of{" "}
+              <span className="text-[var(--color-ink)]">
+                {organization?.slug ?? "the org"}
+              </span>
+              .
+            </p>
+            <input type="hidden" name="brainId" value={brain.id} />
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+              <label className="flex flex-1 flex-col gap-1.5">
+                <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--color-faint)]">
+                  email
+                </span>
+                <input
+                  type="email"
+                  name="email"
+                  required
+                  autoComplete="off"
+                  placeholder="teammate@example.com"
+                  className="rounded-md border border-white/10 bg-[var(--color-bg)]/60 px-3 py-2 font-mono text-[13px] text-[var(--color-ink)] focus:border-white/20 focus:outline-none"
+                />
+              </label>
+              <label className="flex flex-col gap-1.5 sm:w-40">
+                <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--color-faint)]">
+                  role
+                </span>
+                <select
+                  name="role"
+                  defaultValue="editor"
+                  className="rounded-md border border-white/10 bg-[var(--color-bg)]/60 px-3 py-2 font-mono text-[13px] text-[var(--color-ink)] focus:border-white/20 focus:outline-none"
+                >
+                  <option value="viewer">viewer</option>
+                  <option value="editor">editor</option>
+                  <option value="owner">owner</option>
+                </select>
+              </label>
+              <button
+                type="submit"
+                className="inline-flex items-center justify-center rounded-md border border-[var(--color-accent)]/40 px-3 py-2 font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--color-accent)] transition hover:border-[var(--color-accent)]/70 hover:bg-white/[0.02]"
+              >
+                add member
+              </button>
+            </div>
+          </form>
         )}
       </section>
 
