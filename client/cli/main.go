@@ -123,6 +123,8 @@ func main() {
 		exitWith(cmd.Reindex(rest))
 	case "changes":
 		exitWith(cmd.Changes(rest))
+	case "history":
+		exitWith(cmd.History(rest))
 	case "news":
 		exitWith(cmd.News(rest))
 	case "doctor":

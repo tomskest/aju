@@ -11,8 +11,11 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/tomskest/aju/client/cli/internal/config"
 	"github.com/tomskest/aju/client/cli/internal/httpx"
+	"github.com/tomskest/aju/client/cli/internal/state"
 )
 
 // documentResponse mirrors the GET /api/vault/document payload. Fields beyond
@@ -103,7 +106,29 @@ func Read(args []string) error {
 	if doc.ContentHash != "" && os.Getenv("AJU_QUIET") != "1" {
 		fmt.Fprintf(os.Stderr, "head: %s\n", doc.ContentHash)
 	}
+	// Stash (hash, content) so the next `aju update` of the same path can
+	// populate baseHash + baseContent automatically. Cache is keyed by
+	// (profile, brain, path) to keep cross-org state isolated.
+	if doc.ContentHash != "" {
+		stashReadCache(cfg, resolveBrainFlag(*brain, cfg), path, doc.ContentHash, doc.Content)
+	}
 	return nil
+}
+
+// stashReadCache writes the just-read document into ~/.aju/state.json so
+// `aju update` can run CAS without explicit flags. Failures are silent —
+// the cache is best-effort and never blocks the read.
+func stashReadCache(cfg *config.Config, brain, path, hash, content string) {
+	st, err := state.Load()
+	if err != nil || st == nil {
+		return
+	}
+	profile := ""
+	if cfg != nil {
+		profile = cfg.Active
+	}
+	st.PutReadCache(profile, brain, path, hash, content, time.Now().UTC().Format(time.RFC3339))
+	_ = state.Save(st)
 }
 
 // Browse implements `aju browse <dir> [--brain <name>]`.
@@ -266,18 +291,38 @@ returns a Deprecation header.`,
 		return err
 	}
 
+	resolvedBrain := resolveBrainFlag(*brain, cfg)
+
+	// CAS field resolution. Precedence: explicit --base-hash > read cache
+	// > nothing (legacy force-write). --force suppresses the cache lookup.
+	effectiveBaseHash := *baseHash
+	var effectiveBaseContent string
+	if !*force {
+		if effectiveBaseHash == "" {
+			if st, err := state.Load(); err == nil && st != nil {
+				if e, ok := st.LookupReadCache(cfg.Active, resolvedBrain, path); ok {
+					effectiveBaseHash = e.Hash
+					effectiveBaseContent = e.Content
+				}
+			}
+		}
+	}
+
 	body := map[string]any{
 		"path":    path,
 		"content": content,
 		"source":  "aju-cli",
 	}
-	if *baseHash != "" {
-		body["baseHash"] = *baseHash
+	if effectiveBaseHash != "" {
+		body["baseHash"] = effectiveBaseHash
+	}
+	if effectiveBaseContent != "" {
+		body["baseContent"] = effectiveBaseContent
 	}
 	target := "/api/vault/update"
-	if b := resolveBrainFlag(*brain, cfg); b != "" {
-		body["brain"] = b
-		target += "?brain=" + url.QueryEscape(b)
+	if resolvedBrain != "" {
+		body["brain"] = resolvedBrain
+		target += "?brain=" + url.QueryEscape(resolvedBrain)
 	}
 
 	var resp map[string]any
@@ -289,7 +334,18 @@ returns a Deprecation header.`,
 		}
 		return printFriendlyErr(err)
 	}
-	fmt.Printf("Updated %s\n", path)
+	if merged, _ := resp["merged"].(bool); merged {
+		fmt.Printf("Updated %s (auto-merged with concurrent changes)\n", path)
+	} else {
+		fmt.Printf("Updated %s\n", path)
+	}
+	// Refresh the cache so a follow-up update of the same doc keeps
+	// riding the CAS fast path with the latest head.
+	if newHash, ok := resp["contentHash"].(string); ok && newHash != "" {
+		if newContent, ok := resp["content"].(string); ok {
+			stashReadCache(cfg, resolvedBrain, path, newHash, newContent)
+		}
+	}
 	return nil
 }
 

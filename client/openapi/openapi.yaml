@@ -231,7 +231,10 @@ paths:
     post:
       tags: [vault]
       operationId: updateDocument
-      summary: Update a document in place (by path).
+      summary: |
+        Update a document in place (by path). Supports compare-and-swap with
+        three-way merge — see `baseHash`/`baseContent` on `DocumentWrite`
+        and the `409` response shape `DocumentUpdateConflict`.
       parameters:
         - $ref: "#/components/parameters/BrainQuery"
       requestBody:
@@ -241,13 +244,92 @@ paths:
             schema: { $ref: "#/components/schemas/DocumentWrite" }
       responses:
         "200":
-          description: OK
+          description: |
+            OK. When the server auto-merged concurrent edits, the response
+            body extends `Document` with `merged: true` and
+            `mergedFromHeadHash`. When `baseHash` was omitted, the response
+            includes a `Deprecation: true` header advertising the migration
+            target.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Document" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: |
+            Compare-and-swap mismatch. Either the caller's `baseHash` is
+            stale (`error: stale_base_hash`) or a three-way merge was
+            attempted but had unresolved conflicts (`error: merge_conflict`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocumentUpdateConflict" }
+
+  /api/vault/document/versions:
+    get:
+      tags: [vault]
+      operationId: listDocumentVersions
+      summary: |
+        List the version history of a document. Metadata only — fetch
+        individual version bodies via /api/vault/document/version. Newest
+        first by default.
+      parameters:
+        - $ref: "#/components/parameters/BrainQuery"
+        - in: query
+          name: path
+          required: true
+          schema: { type: string }
+          description: Vault path of the document.
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - in: query
+          name: cursor
+          schema: { type: string, format: date-time }
+          description: ISO timestamp from a previous response's `nextCursor`.
+        - in: query
+          name: direction
+          schema: { type: string, enum: [newest, oldest], default: newest }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocumentVersionsList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/vault/document/version:
+    get:
+      tags: [vault]
+      operationId: getDocumentVersion
+      summary: |
+        Fetch a single historical version of a document, including its
+        full content. Address by either `n` (versionN) or `hash` (contentHash).
+      parameters:
+        - $ref: "#/components/parameters/BrainQuery"
+        - in: query
+          name: path
+          required: true
+          schema: { type: string }
+        - in: query
+          name: "n"
+          schema: { type: integer, minimum: 1 }
+          description: 1-based version number from the history list.
+        - in: query
+          name: hash
+          schema: { type: string, pattern: '^[a-f0-9]{64}$' }
+          description: SHA-256 content hash. Mutually exclusive with `n`.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocumentVersion" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
   /api/vault/delete:
@@ -646,6 +728,57 @@ components:
         source:
           type: string
           description: Free-form label for the origin of this write (e.g. "cli", "sdk-ts").
+        baseHash:
+          type: string
+          pattern: '^[a-f0-9]{64}$'
+          description: |
+            On update only. SHA-256 contentHash of the version the caller
+            had at read time. Enables compare-and-swap: server fast-paths
+            when the hash still matches, attempts a three-way merge (when
+            baseContent is also supplied) if it does not, and returns 409
+            with the current head when the merge cannot be resolved.
+
+            Omitting baseHash falls back to legacy force-write and the
+            response carries a `Deprecation: true` header.
+        baseContent:
+          type: string
+          description: |
+            On update only. Exact content the caller had at read time.
+            Required alongside baseHash for server-side three-way merge of
+            concurrent edits to non-overlapping regions.
+
+    DocumentUpdateConflict:
+      type: object
+      required: [error, headHash, headContent]
+      description: |
+        409 response payload for /api/vault/update. Returned when the
+        supplied baseHash does not match the current head AND either no
+        baseContent was supplied (`error: stale_base_hash`) or the
+        attempted three-way merge had unresolved overlapping conflicts
+        (`error: merge_conflict`).
+      properties:
+        error:
+          type: string
+          enum: [stale_base_hash, merge_conflict]
+        message: { type: string }
+        headHash:
+          type: string
+          description: Current contentHash on the server.
+        headContent:
+          type: string
+          description: Current content on the server. Use as `theirs` in a client-side merge.
+        baseHash:
+          type: string
+          description: The baseHash the caller supplied (echoed back).
+        baseContent:
+          type: string
+          description: Echoed baseContent — only present on `merge_conflict`.
+        mineContent:
+          type: string
+          description: The caller's content — only present on `merge_conflict`.
+        conflictedContent:
+          type: string
+          description: Diff3 output with `<<<<<<<` / `=======` / `>>>>>>>` markers — only present on `merge_conflict`.
 
     Document:
       type: object
@@ -676,6 +809,66 @@ components:
         syncedAt: { type: string, format: date-time }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+
+    DocumentVersionMeta:
+      type: object
+      required:
+        [id, versionN, contentHash, source, createdAt]
+      description: |
+        One row from a document's append-only version history. `parentHash`
+        is null on the genesis row (insert / migration backfill).
+        `mergeParentHash` is non-null only on three-way-merge commits and
+        records the caller's `baseHash` so the history is a proper DAG.
+      properties:
+        id: { type: string }
+        versionN: { type: integer }
+        contentHash: { type: string }
+        parentHash: { type: string, nullable: true }
+        mergeParentHash: { type: string, nullable: true }
+        source: { type: string }
+        changedBy: { type: string, nullable: true }
+        message: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+
+    DocumentVersionsList:
+      type: object
+      required: [path, headHash, direction, versions]
+      properties:
+        path: { type: string }
+        headHash:
+          type: string
+          description: contentHash of the document's current head.
+        direction:
+          type: string
+          enum: [newest, oldest]
+        versions:
+          type: array
+          items: { $ref: "#/components/schemas/DocumentVersionMeta" }
+        nextCursor:
+          type: string
+          format: date-time
+          nullable: true
+
+    DocumentVersion:
+      type: object
+      required:
+        [id, path, versionN, content, contentHash, source, createdAt]
+      description: |
+        A single historical version with its full content. The hash echoed
+        as `contentHash` is the SHA-256 you can re-submit to /api/vault/update
+        as `baseHash` to rebase a write onto this version.
+      properties:
+        id: { type: string }
+        path: { type: string }
+        versionN: { type: integer }
+        content: { type: string }
+        contentHash: { type: string }
+        parentHash: { type: string, nullable: true }
+        mergeParentHash: { type: string, nullable: true }
+        source: { type: string }
+        changedBy: { type: string, nullable: true }
+        message: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
 
     DocumentSummary:
       type: object

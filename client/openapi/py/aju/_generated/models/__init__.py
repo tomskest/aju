@@ -16,12 +16,19 @@ from .delete_file_response_200 import DeleteFileResponse200
 from .document import Document
 from .document_frontmatter_type_0 import DocumentFrontmatterType0
 from .document_summary import DocumentSummary
+from .document_update_conflict import DocumentUpdateConflict
+from .document_update_conflict_error import DocumentUpdateConflictError
+from .document_version import DocumentVersion
+from .document_version_meta import DocumentVersionMeta
+from .document_versions_list import DocumentVersionsList
+from .document_versions_list_direction import DocumentVersionsListDirection
 from .document_write import DocumentWrite
 from .error import Error
 from .graph import Graph
 from .graph_edges_item import GraphEdgesItem
 from .graph_nodes_item import GraphNodesItem
 from .list_brains_response_200 import ListBrainsResponse200
+from .list_document_versions_direction import ListDocumentVersionsDirection
 from .list_files_response_200 import ListFilesResponse200
 from .presign_upload_body import PresignUploadBody
 from .presign_upload_response_200 import PresignUploadResponse200
@@ -56,12 +63,19 @@ __all__ = (
     "Document",
     "DocumentFrontmatterType0",
     "DocumentSummary",
+    "DocumentUpdateConflict",
+    "DocumentUpdateConflictError",
+    "DocumentVersion",
+    "DocumentVersionMeta",
+    "DocumentVersionsList",
+    "DocumentVersionsListDirection",
     "DocumentWrite",
     "Error",
     "Graph",
     "GraphEdgesItem",
     "GraphNodesItem",
     "ListBrainsResponse200",
+    "ListDocumentVersionsDirection",
     "ListFilesResponse200",
     "PresignUploadBody",
     "PresignUploadResponse200",

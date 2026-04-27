@@ -34,6 +34,7 @@ Graph:
   auto-link             Insert [[wikilinks]] for mentions of other docs (idempotent)
   reindex               Repopulate FTS, embeddings, and links for the active brain
   changes               Show recent changes (--since, --exclude-source, --limit; --brain a,b or all)
+  history <path>        Show the version history of a document (--version N | --hash <hex> for content)
 
 Brains:
   brains list                    List brains accessible to the active profile (active marked with *)

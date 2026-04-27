@@ -4,6 +4,12 @@ import type { Client } from "@hey-api/client-fetch";
 export * from "./generated/types.gen.js";
 export * as api from "./generated/sdk.gen.js";
 export { client as defaultClient } from "./generated/client.gen.js";
+export {
+  updateWithRebase,
+  type ApplyEdit,
+  type UpdateWithRebaseOptions,
+  type UpdateWithRebaseResult,
+} from "./rebase.js";
 
 export type AjuClientOptions = {
   apiKey: string;

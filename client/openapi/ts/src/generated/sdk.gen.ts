@@ -29,6 +29,12 @@ import type {
   UpdateDocumentData,
   UpdateDocumentResponse,
   UpdateDocumentError,
+  ListDocumentVersionsData,
+  ListDocumentVersionsResponse,
+  ListDocumentVersionsError,
+  GetDocumentVersionData,
+  GetDocumentVersionResponse,
+  GetDocumentVersionError,
   DeleteDocumentData,
   DeleteDocumentResponse,
   DeleteDocumentError,
@@ -256,7 +262,10 @@ export const createDocument = <ThrowOnError extends boolean = false>(
 };
 
 /**
- * Update a document in place (by path).
+ * Update a document in place (by path). Supports compare-and-swap with
+ * three-way merge — see `baseHash`/`baseContent` on `DocumentWrite`
+ * and the `409` response shape `DocumentUpdateConflict`.
+ *
  */
 export const updateDocument = <ThrowOnError extends boolean = false>(
   options: Options<UpdateDocumentData, ThrowOnError>,
@@ -278,6 +287,55 @@ export const updateDocument = <ThrowOnError extends boolean = false>(
       "Content-Type": "application/json",
       ...options?.headers,
     },
+  });
+};
+
+/**
+ * List the version history of a document. Metadata only — fetch
+ * individual version bodies via /api/vault/document/version. Newest
+ * first by default.
+ *
+ */
+export const listDocumentVersions = <ThrowOnError extends boolean = false>(
+  options: Options<ListDocumentVersionsData, ThrowOnError>,
+) => {
+  return (options.client ?? _heyApiClient).get<
+    ListDocumentVersionsResponse,
+    ListDocumentVersionsError,
+    ThrowOnError
+  >({
+    security: [
+      {
+        scheme: "bearer",
+        type: "http",
+      },
+    ],
+    url: "/api/vault/document/versions",
+    ...options,
+  });
+};
+
+/**
+ * Fetch a single historical version of a document, including its
+ * full content. Address by either `n` (versionN) or `hash` (contentHash).
+ *
+ */
+export const getDocumentVersion = <ThrowOnError extends boolean = false>(
+  options: Options<GetDocumentVersionData, ThrowOnError>,
+) => {
+  return (options.client ?? _heyApiClient).get<
+    GetDocumentVersionResponse,
+    GetDocumentVersionError,
+    ThrowOnError
+  >({
+    security: [
+      {
+        scheme: "bearer",
+        type: "http",
+      },
+    ],
+    url: "/api/vault/document/version",
+    ...options,
   });
 };
 

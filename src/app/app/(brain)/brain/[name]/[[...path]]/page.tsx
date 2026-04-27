@@ -20,6 +20,7 @@ type DocSummary = {
 
 type DocFull = DocSummary & {
   content: string;
+  contentHash: string;
   rendered: string;
   updatedAt: string;
   wordCount: number;
@@ -81,6 +82,7 @@ export default async function BrainPage(props: PageProps) {
             path: true,
             title: true,
             content: true,
+            contentHash: true,
             wordCount: true,
             updatedAt: true,
           },
@@ -105,6 +107,7 @@ export default async function BrainPage(props: PageProps) {
             path: row.path,
             title: row.title,
             content: row.content,
+            contentHash: row.contentHash,
             rendered: renderMarkdown(md),
             wordCount: row.wordCount,
             updatedAt: row.updatedAt.toISOString(),

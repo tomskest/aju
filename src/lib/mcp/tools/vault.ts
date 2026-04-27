@@ -7,7 +7,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Prisma as PrismaTenant } from "@prisma/client-tenant";
-import { parseDocument } from "@/lib/vault";
+import { parseDocument, threeWayMerge } from "@/lib/vault";
 import { scheduleRebuildLinks } from "@/lib/vault";
 import { updateDocumentEmbedding } from "@/lib/embeddings";
 import { withTenant } from "@/lib/tenant";
@@ -52,6 +52,7 @@ export function registerVaultTools(
                 frontmatter: true,
                 wikilinks: true,
                 content: true,
+                contentHash: true,
                 wordCount: true,
                 updatedAt: true,
               },
@@ -71,6 +72,9 @@ export function registerVaultTools(
               wordCount: doc.wordCount,
               updatedAt: doc.updatedAt.toISOString(),
               content: doc.content,
+              // Pass through to enable CAS on the next aju_update call.
+              // Agents should hold this hash and pass it back as baseHash.
+              contentHash: doc.contentHash,
             });
           },
         );
@@ -188,6 +192,20 @@ export function registerVaultTools(
                 syncedAt: new Date(),
               },
             });
+            await tx.vaultDocumentVersion.create({
+              data: {
+                brainId: b.brainId,
+                documentId: doc.id,
+                path,
+                versionN: 1,
+                content: parsed.content,
+                contentHash: parsed.contentHash,
+                parentHash: null,
+                mergeParentHash: null,
+                source: "mcp",
+                changedBy: ctx.identity,
+              },
+            });
             await tx.vaultChangeLog.create({
               data: {
                 brainId: b.brainId,
@@ -232,85 +250,243 @@ export function registerVaultTools(
   // ── aju_update ──────────────────────────────────────
   server.tool(
     "aju_update",
-    "Replace the full content of an existing memory / note / document in an aju brain. Re-parses frontmatter and re-indexes embeddings.",
+    "Replace the full content of an existing memory / note / document in an aju brain. Re-parses frontmatter and re-indexes embeddings. Pass baseHash + baseContent (from a prior aju_read) to enable compare-and-swap with three-way merge — concurrent edits to non-overlapping regions auto-merge; conflicts are returned so the agent can re-plan.",
     {
       path: z.string().describe("Existing document path."),
       content: z.string().describe("Full replacement markdown content."),
       brain: z.string().optional().describe("Brain name. Omit for default."),
+      baseHash: z
+        .string()
+        .regex(/^[a-f0-9]{64}$/, "baseHash must be sha256 hex")
+        .optional()
+        .describe(
+          "SHA-256 contentHash of the version you read. Enables CAS — server rejects with conflict info if the doc moved since.",
+        ),
+      baseContent: z
+        .string()
+        .optional()
+        .describe(
+          "Exact content you read. Required alongside baseHash for server-side three-way merge of concurrent edits.",
+        ),
     },
-    async ({ path, content, brain }) => {
+    async ({ path, content, brain, baseHash, baseContent }) => {
       try {
         const organizationId = requireOrgId(ctx);
-        const { tenant, updatedId, updatedPath, updatedTitle, brainId, brainName } =
-          await withTenant(
-            { organizationId, userId: ctx.userId, agentId: ctx.agentId },
-            async ({ tenant, tx }) => {
-              const b = await resolveBrainForTool(tx, ctx, brain);
-              if (!canWrite(b)) {
-                throw new Error(`Write access denied for brain: ${b.brainName}`);
-              }
+        const result = await withTenant(
+          { organizationId, userId: ctx.userId, agentId: ctx.agentId },
+          async ({ tenant, tx }) => {
+            const b = await resolveBrainForTool(tx, ctx, brain);
+            if (!canWrite(b)) {
+              throw new Error(`Write access denied for brain: ${b.brainName}`);
+            }
 
-              const existing = await tx.vaultDocument.findFirst({
-                where: { brainId: b.brainId, path },
-                select: { id: true },
-              });
-              if (!existing) {
-                throw new Error(`Document not found: ${path}`);
-              }
+            const existing = await tx.vaultDocument.findFirst({
+              where: { brainId: b.brainId, path },
+              select: { id: true, content: true, contentHash: true },
+            });
+            if (!existing) {
+              throw new Error(`Document not found: ${path}`);
+            }
 
-              const parsed = parseDocument(content, path);
-              const updated = await tx.vaultDocument.update({
-                where: { id: existing.id },
-                data: {
-                  title: parsed.title,
-                  frontmatter: (parsed.frontmatter ?? undefined) as PrismaTenant.InputJsonValue | undefined,
-                  docType: parsed.docType,
-                  docStatus: parsed.docStatus,
-                  tags: parsed.tags,
-                  content: parsed.content,
-                  contentHash: parsed.contentHash,
-                  wordCount: parsed.wordCount,
-                  directory: parsed.directory,
-                  section: parsed.section,
-                  wikilinks: parsed.wikilinks,
-                  syncedAt: new Date(),
-                },
-              });
-              await tx.vaultChangeLog.create({
-                data: {
-                  brainId: b.brainId,
-                  documentId: existing.id,
-                  path,
-                  operation: "update",
-                  source: "mcp",
-                  changedBy: ctx.identity,
-                },
-              });
-              return {
-                tenant,
-                updatedId: updated.id,
-                updatedPath: updated.path,
-                updatedTitle: updated.title,
+            // CAS + three-way merge mirror /api/vault/update. Same
+            // semantics so agents using the MCP and clients hitting the
+            // REST endpoint behave identically.
+            let resolvedContent = content;
+            let merged = false;
+            let mergedFromHeadHash: string | null = null;
+            if (baseHash && baseHash !== existing.contentHash) {
+              if (baseContent === undefined) {
+                return {
+                  conflict: {
+                    error: "stale_base_hash",
+                    message:
+                      "Document changed since you read it. Re-read, re-apply your edit, and retry. Pass baseContent on retry to enable three-way merge.",
+                    headHash: existing.contentHash,
+                    headContent: existing.content,
+                    baseHash,
+                  },
+                } as const;
+              }
+              const m = threeWayMerge(baseContent, existing.content, content);
+              if (!m.ok) {
+                return {
+                  conflict: {
+                    error: "merge_conflict",
+                    message:
+                      "Concurrent edits to overlapping regions. Resolve and retry.",
+                    headHash: existing.contentHash,
+                    headContent: existing.content,
+                    baseHash,
+                    conflictedContent: m.conflicted,
+                  },
+                } as const;
+              }
+              resolvedContent = m.merged;
+              merged = true;
+              mergedFromHeadHash = existing.contentHash;
+            }
+
+            const parsed = parseDocument(resolvedContent, path);
+            const updated = await tx.vaultDocument.update({
+              where: { id: existing.id },
+              data: {
+                title: parsed.title,
+                frontmatter: (parsed.frontmatter ?? undefined) as PrismaTenant.InputJsonValue | undefined,
+                docType: parsed.docType,
+                docStatus: parsed.docStatus,
+                tags: parsed.tags,
+                content: parsed.content,
+                contentHash: parsed.contentHash,
+                wordCount: parsed.wordCount,
+                directory: parsed.directory,
+                section: parsed.section,
+                wikilinks: parsed.wikilinks,
+                syncedAt: new Date(),
+              },
+            });
+            const lastVersion = await tx.vaultDocumentVersion.findFirst({
+              where: { documentId: existing.id },
+              orderBy: { versionN: "desc" },
+              select: { versionN: true },
+            });
+            await tx.vaultDocumentVersion.create({
+              data: {
                 brainId: b.brainId,
-                brainName: b.brainName,
-              };
-            },
-          );
+                documentId: existing.id,
+                path,
+                versionN: (lastVersion?.versionN ?? 0) + 1,
+                content: parsed.content,
+                contentHash: parsed.contentHash,
+                parentHash: existing.contentHash,
+                mergeParentHash: merged ? baseHash ?? null : null,
+                source: "mcp",
+                changedBy: ctx.identity,
+              },
+            });
+            await tx.vaultChangeLog.create({
+              data: {
+                brainId: b.brainId,
+                documentId: existing.id,
+                path,
+                operation: "update",
+                source: "mcp",
+                changedBy: ctx.identity,
+              },
+            });
+            return {
+              ok: true as const,
+              tenant,
+              updatedId: updated.id,
+              updatedPath: updated.path,
+              updatedTitle: updated.title,
+              updatedHash: updated.contentHash,
+              brainId: b.brainId,
+              brainName: b.brainName,
+              merged,
+              mergedFromHeadHash,
+            };
+          },
+        );
 
-        scheduleRebuildLinks(tenant, brainId).catch((e) =>
+        if ("conflict" in result) {
+          // Surface conflict info as a structured error result so the
+          // calling LLM can branch on it and re-plan.
+          return errorResult(JSON.stringify(result.conflict));
+        }
+
+        scheduleRebuildLinks(result.tenant, result.brainId).catch((e) =>
           console.error("[mcp] rebuildLinks after update failed:", e),
         );
-        updateDocumentEmbedding(tenant, updatedId).catch((e) =>
+        updateDocumentEmbedding(result.tenant, result.updatedId).catch((e) =>
           console.error("[mcp] embedding after update failed:", e),
         );
 
         return textResult({
-          brain: brainName,
+          brain: result.brainName,
           updated: true,
-          path: updatedPath,
-          title: updatedTitle,
-          id: updatedId,
+          path: result.updatedPath,
+          title: result.updatedTitle,
+          id: result.updatedId,
+          contentHash: result.updatedHash,
+          ...(result.merged
+            ? { merged: true, mergedFromHeadHash: result.mergedFromHeadHash }
+            : {}),
         });
+      } catch (err) {
+        return errorResult(String(err instanceof Error ? err.message : err));
+      }
+    },
+  );
+
+  // ── aju_history ─────────────────────────────────────
+  server.tool(
+    "aju_history",
+    "List the version history of a document in an aju brain. Returns metadata for each commit (versionN, contentHash, parentHash, mergeParentHash, source, changedBy, createdAt) — most recent first by default. Use this to audit who changed what, recover an earlier version, or rebase against a specific historical hash. Pair with aju_read for the full body of any single version.",
+    {
+      path: z.string().describe("Vault-relative path (e.g. 'topics/foo.md')."),
+      brain: z.string().optional().describe("Brain name. Omit for default."),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(200)
+        .optional()
+        .describe("Max versions to return. Default 50."),
+      direction: z
+        .enum(["newest", "oldest"])
+        .optional()
+        .describe("Order. Default newest-first."),
+    },
+    async ({ path, brain, limit, direction }) => {
+      try {
+        const organizationId = requireOrgId(ctx);
+        return await withTenant(
+          { organizationId, userId: ctx.userId, agentId: ctx.agentId },
+          async ({ tx }) => {
+            const b = await resolveBrainForTool(tx, ctx, brain);
+            const doc = await tx.vaultDocument.findFirst({
+              where: { brainId: b.brainId, path },
+              select: { id: true, contentHash: true },
+            });
+            if (!doc) return errorResult(`Document not found: ${path}`);
+
+            const order = direction === "oldest" ? "asc" : "desc";
+            const rows = await tx.vaultDocumentVersion.findMany({
+              where: { brainId: b.brainId, documentId: doc.id },
+              select: {
+                id: true,
+                versionN: true,
+                contentHash: true,
+                parentHash: true,
+                mergeParentHash: true,
+                source: true,
+                changedBy: true,
+                message: true,
+                createdAt: true,
+              },
+              orderBy: { createdAt: order },
+              take: Math.min(limit ?? 50, 200),
+            });
+
+            return textResult({
+              brain: b.brainName,
+              path,
+              headHash: doc.contentHash,
+              direction: order === "asc" ? "oldest" : "newest",
+              versions: rows.map((v) => ({
+                id: v.id,
+                versionN: v.versionN,
+                contentHash: v.contentHash,
+                parentHash: v.parentHash,
+                mergeParentHash: v.mergeParentHash,
+                source: v.source,
+                changedBy: v.changedBy,
+                message: v.message,
+                createdAt: v.createdAt.toISOString(),
+              })),
+            });
+          },
+        );
       } catch (err) {
         return errorResult(String(err instanceof Error ? err.message : err));
       }

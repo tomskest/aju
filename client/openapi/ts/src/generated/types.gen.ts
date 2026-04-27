@@ -27,6 +27,62 @@ export type DocumentWrite = {
    * Free-form label for the origin of this write (e.g. "cli", "sdk-ts").
    */
   source: string;
+  /**
+   * On update only. SHA-256 contentHash of the version the caller
+   * had at read time. Enables compare-and-swap: server fast-paths
+   * when the hash still matches, attempts a three-way merge (when
+   * baseContent is also supplied) if it does not, and returns 409
+   * with the current head when the merge cannot be resolved.
+   *
+   * Omitting baseHash falls back to legacy force-write and the
+   * response carries a `Deprecation: true` header.
+   *
+   */
+  baseHash?: string;
+  /**
+   * On update only. Exact content the caller had at read time.
+   * Required alongside baseHash for server-side three-way merge of
+   * concurrent edits to non-overlapping regions.
+   *
+   */
+  baseContent?: string;
+};
+
+/**
+ * 409 response payload for /api/vault/update. Returned when the
+ * supplied baseHash does not match the current head AND either no
+ * baseContent was supplied (`error: stale_base_hash`) or the
+ * attempted three-way merge had unresolved overlapping conflicts
+ * (`error: merge_conflict`).
+ *
+ */
+export type DocumentUpdateConflict = {
+  error: "stale_base_hash" | "merge_conflict";
+  message?: string;
+  /**
+   * Current contentHash on the server.
+   */
+  headHash: string;
+  /**
+   * Current content on the server. Use as `theirs` in a client-side merge.
+   */
+  headContent: string;
+  /**
+   * The baseHash the caller supplied (echoed back).
+   */
+  baseHash?: string;
+  /**
+   * Echoed baseContent — only present on `merge_conflict`.
+   */
+  baseContent?: string;
+  /**
+   * The caller's content — only present on `merge_conflict`.
+   */
+  mineContent?: string;
+  /**
+   * Diff3 output with `<<<<<<<` / `=======` / `>>>>>>>` markers — only present on `merge_conflict`.
+   */
+  conflictedContent?: string;
 };
 
 export type Document = {
@@ -50,6 +106,56 @@ export type Document = {
   syncedAt?: string;
   createdAt?: string;
   updatedAt?: string;
+};
+
+/**
+ * One row from a document's append-only version history. `parentHash`
+ * is null on the genesis row (insert / migration backfill).
+ * `mergeParentHash` is non-null only on three-way-merge commits and
+ * records the caller's `baseHash` so the history is a proper DAG.
+ *
+ */
+export type DocumentVersionMeta = {
+  id: string;
+  versionN: number;
+  contentHash: string;
+  parentHash?: string | null;
+  mergeParentHash?: string | null;
+  source: string;
+  changedBy?: string | null;
+  message?: string | null;
+  createdAt: string;
+};
+
+export type DocumentVersionsList = {
+  path: string;
+  /**
+   * contentHash of the document's current head.
+   */
+  headHash: string;
+  direction: "newest" | "oldest";
+  versions: Array<DocumentVersionMeta>;
+  nextCursor?: string | null;
+};
+
+/**
+ * A single historical version with its full content. The hash echoed
+ * as `contentHash` is the SHA-256 you can re-submit to /api/vault/update
+ * as `baseHash` to rebase a write onto this version.
+ *
+ */
+export type DocumentVersion = {
+  id: string;
+  path: string;
+  versionN: number;
+  content: string;
+  contentHash: string;
+  parentHash?: string | null;
+  mergeParentHash?: string | null;
+  source: string;
+  changedBy?: string | null;
+  message?: string | null;
+  createdAt: string;
 };
 
 export type DocumentSummary = {
@@ -505,18 +611,128 @@ export type UpdateDocumentErrors = {
    * Resource not found
    */
   404: _Error;
+  /**
+   * Compare-and-swap mismatch. Either the caller's `baseHash` is
+   * stale (`error: stale_base_hash`) or a three-way merge was
+   * attempted but had unresolved conflicts (`error: merge_conflict`).
+   *
+   */
+  409: DocumentUpdateConflict;
 };
 
 export type UpdateDocumentError = UpdateDocumentErrors[keyof UpdateDocumentErrors];
 
 export type UpdateDocumentResponses = {
   /**
-   * OK
+   * OK. When the server auto-merged concurrent edits, the response
+   * body extends `Document` with `merged: true` and
+   * `mergedFromHeadHash`. When `baseHash` was omitted, the response
+   * includes a `Deprecation: true` header advertising the migration
+   * target.
+   *
    */
   200: Document;
 };
 
 export type UpdateDocumentResponse = UpdateDocumentResponses[keyof UpdateDocumentResponses];
+
+export type ListDocumentVersionsData = {
+  body?: never;
+  path?: never;
+  query: {
+    /**
+     * Brain name. Omit to target the caller's default brain.
+     */
+    brain?: string;
+    /**
+     * Vault path of the document.
+     */
+    path: string;
+    limit?: number;
+    /**
+     * ISO timestamp from a previous response's `nextCursor`.
+     */
+    cursor?: string;
+    direction?: "newest" | "oldest";
+  };
+  url: "/api/vault/document/versions";
+};
+
+export type ListDocumentVersionsErrors = {
+  /**
+   * Bad request
+   */
+  400: _Error;
+  /**
+   * Missing or invalid API key
+   */
+  401: _Error;
+  /**
+   * Resource not found
+   */
+  404: _Error;
+};
+
+export type ListDocumentVersionsError =
+  ListDocumentVersionsErrors[keyof ListDocumentVersionsErrors];
+
+export type ListDocumentVersionsResponses = {
+  /**
+   * OK
+   */
+  200: DocumentVersionsList;
+};
+
+export type ListDocumentVersionsResponse =
+  ListDocumentVersionsResponses[keyof ListDocumentVersionsResponses];
+
+export type GetDocumentVersionData = {
+  body?: never;
+  path?: never;
+  query: {
+    /**
+     * Brain name. Omit to target the caller's default brain.
+     */
+    brain?: string;
+    path: string;
+    /**
+     * 1-based version number from the history list.
+     */
+    n?: number;
+    /**
+     * SHA-256 content hash. Mutually exclusive with `n`.
+     */
+    hash?: string;
+  };
+  url: "/api/vault/document/version";
+};
+
+export type GetDocumentVersionErrors = {
+  /**
+   * Bad request
+   */
+  400: _Error;
+  /**
+   * Missing or invalid API key
+   */
+  401: _Error;
+  /**
+   * Resource not found
+   */
+  404: _Error;
+};
+
+export type GetDocumentVersionError = GetDocumentVersionErrors[keyof GetDocumentVersionErrors];
+
+export type GetDocumentVersionResponses = {
+  /**
+   * OK
+   */
+  200: DocumentVersion;
+};
+
+export type GetDocumentVersionResponse =
+  GetDocumentVersionResponses[keyof GetDocumentVersionResponses];
 
 export type DeleteDocumentData = {
   body: {

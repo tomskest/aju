@@ -8,9 +8,7 @@ from ...client import AuthenticatedClient, Client
 from ...types import Response, UNSET
 from ... import errors
 
-from ...models.document import Document
-from ...models.document_update_conflict import DocumentUpdateConflict
-from ...models.document_write import DocumentWrite
+from ...models.document_version import DocumentVersion
 from ...models.error import Error
 from ...types import UNSET, Unset
 from typing import cast
@@ -19,12 +17,13 @@ from typing import cast
 
 def _get_kwargs(
     *,
-    body: DocumentWrite,
     brain: str | Unset = UNSET,
+    path: str,
+    n: int | Unset = UNSET,
+    hash_: str | Unset = UNSET,
 
 ) -> dict[str, Any]:
-    headers: dict[str, Any] = {}
-
+    
 
     
 
@@ -32,29 +31,30 @@ def _get_kwargs(
 
     params["brain"] = brain
 
+    params["path"] = path
+
+    params["n"] = n
+
+    params["hash"] = hash_
+
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
 
     _kwargs: dict[str, Any] = {
-        "method": "post",
-        "url": "/api/vault/update",
+        "method": "get",
+        "url": "/api/vault/document/version",
         "params": params,
     }
 
-    _kwargs["json"] = body.to_dict()
 
-
-    headers["Content-Type"] = "application/json"
-
-    _kwargs["headers"] = headers
     return _kwargs
 
 
 
-def _parse_response(*, client: AuthenticatedClient | Client, response: httpx.Response) -> Document | DocumentUpdateConflict | Error | None:
+def _parse_response(*, client: AuthenticatedClient | Client, response: httpx.Response) -> DocumentVersion | Error | None:
     if response.status_code == 200:
-        response_200 = Document.from_dict(response.json())
+        response_200 = DocumentVersion.from_dict(response.json())
 
 
 
@@ -74,13 +74,6 @@ def _parse_response(*, client: AuthenticatedClient | Client, response: httpx.Res
 
         return response_401
 
-    if response.status_code == 403:
-        response_403 = Error.from_dict(response.json())
-
-
-
-        return response_403
-
     if response.status_code == 404:
         response_404 = Error.from_dict(response.json())
 
@@ -88,20 +81,13 @@ def _parse_response(*, client: AuthenticatedClient | Client, response: httpx.Res
 
         return response_404
 
-    if response.status_code == 409:
-        response_409 = DocumentUpdateConflict.from_dict(response.json())
-
-
-
-        return response_409
-
     if client.raise_on_unexpected_status:
         raise errors.UnexpectedStatus(response.status_code, response.content)
     else:
         return None
 
 
-def _build_response(*, client: AuthenticatedClient | Client, response: httpx.Response) -> Response[Document | DocumentUpdateConflict | Error]:
+def _build_response(*, client: AuthenticatedClient | Client, response: httpx.Response) -> Response[DocumentVersion | Error]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -113,30 +99,35 @@ def _build_response(*, client: AuthenticatedClient | Client, response: httpx.Res
 def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
-    body: DocumentWrite,
     brain: str | Unset = UNSET,
+    path: str,
+    n: int | Unset = UNSET,
+    hash_: str | Unset = UNSET,
 
-) -> Response[Document | DocumentUpdateConflict | Error]:
-    """ Update a document in place (by path). Supports compare-and-swap with
-    three-way merge — see `baseHash`/`baseContent` on `DocumentWrite`
-    and the `409` response shape `DocumentUpdateConflict`.
+) -> Response[DocumentVersion | Error]:
+    """ Fetch a single historical version of a document, including its
+    full content. Address by either `n` (versionN) or `hash` (contentHash).
 
     Args:
         brain (str | Unset):
-        body (DocumentWrite):
+        path (str):
+        n (int | Unset):
+        hash_ (str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Document | DocumentUpdateConflict | Error]
+        Response[DocumentVersion | Error]
      """
 
 
     kwargs = _get_kwargs(
-        body=body,
-brain=brain,
+        brain=brain,
+path=path,
+n=n,
+hash_=hash_,
 
     )
 
@@ -149,61 +140,71 @@ brain=brain,
 def sync(
     *,
     client: AuthenticatedClient | Client,
-    body: DocumentWrite,
     brain: str | Unset = UNSET,
+    path: str,
+    n: int | Unset = UNSET,
+    hash_: str | Unset = UNSET,
 
-) -> Document | DocumentUpdateConflict | Error | None:
-    """ Update a document in place (by path). Supports compare-and-swap with
-    three-way merge — see `baseHash`/`baseContent` on `DocumentWrite`
-    and the `409` response shape `DocumentUpdateConflict`.
+) -> DocumentVersion | Error | None:
+    """ Fetch a single historical version of a document, including its
+    full content. Address by either `n` (versionN) or `hash` (contentHash).
 
     Args:
         brain (str | Unset):
-        body (DocumentWrite):
+        path (str):
+        n (int | Unset):
+        hash_ (str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Document | DocumentUpdateConflict | Error
+        DocumentVersion | Error
      """
 
 
     return sync_detailed(
         client=client,
-body=body,
 brain=brain,
+path=path,
+n=n,
+hash_=hash_,
 
     ).parsed
 
 async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
-    body: DocumentWrite,
     brain: str | Unset = UNSET,
+    path: str,
+    n: int | Unset = UNSET,
+    hash_: str | Unset = UNSET,
 
-) -> Response[Document | DocumentUpdateConflict | Error]:
-    """ Update a document in place (by path). Supports compare-and-swap with
-    three-way merge — see `baseHash`/`baseContent` on `DocumentWrite`
-    and the `409` response shape `DocumentUpdateConflict`.
+) -> Response[DocumentVersion | Error]:
+    """ Fetch a single historical version of a document, including its
+    full content. Address by either `n` (versionN) or `hash` (contentHash).
 
     Args:
         brain (str | Unset):
-        body (DocumentWrite):
+        path (str):
+        n (int | Unset):
+        hash_ (str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Document | DocumentUpdateConflict | Error]
+        Response[DocumentVersion | Error]
      """
 
 
     kwargs = _get_kwargs(
-        body=body,
-brain=brain,
+        brain=brain,
+path=path,
+n=n,
+hash_=hash_,
 
     )
 
@@ -216,30 +217,35 @@ brain=brain,
 async def asyncio(
     *,
     client: AuthenticatedClient | Client,
-    body: DocumentWrite,
     brain: str | Unset = UNSET,
+    path: str,
+    n: int | Unset = UNSET,
+    hash_: str | Unset = UNSET,
 
-) -> Document | DocumentUpdateConflict | Error | None:
-    """ Update a document in place (by path). Supports compare-and-swap with
-    three-way merge — see `baseHash`/`baseContent` on `DocumentWrite`
-    and the `409` response shape `DocumentUpdateConflict`.
+) -> DocumentVersion | Error | None:
+    """ Fetch a single historical version of a document, including its
+    full content. Address by either `n` (versionN) or `hash` (contentHash).
 
     Args:
         brain (str | Unset):
-        body (DocumentWrite):
+        path (str):
+        n (int | Unset):
+        hash_ (str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Document | DocumentUpdateConflict | Error
+        DocumentVersion | Error
      """
 
 
     return (await asyncio_detailed(
         client=client,
-body=body,
 brain=brain,
+path=path,
+n=n,
+hash_=hash_,
 
     )).parsed

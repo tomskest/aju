@@ -14,6 +14,7 @@ type DocSummary = {
 
 type DocFull = DocSummary & {
   content: string;
+  contentHash: string;
   rendered: string;
   updatedAt: string;
   wordCount: number;
@@ -115,6 +116,9 @@ export default function BrainExplorer({
   const handleSave = async () => {
     if (!currentDoc) return;
     setError(null);
+    // CAS: send the head we read alongside its content. The server fast-paths
+    // when the hash still matches, attempts a three-way merge on a stale
+    // base, and returns 409 only when the merge has unresolved conflicts.
     const res = await fetch(
       `/api/vault/update?brain=${encodeURIComponent(brainName)}`,
       {
@@ -124,11 +128,24 @@ export default function BrainExplorer({
           path: currentDoc.path,
           content: editorContent,
           source: "web",
+          baseHash: currentDoc.contentHash,
+          baseContent: currentDoc.content,
         }),
       },
     );
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
+      if (res.status === 409) {
+        // Either a stale-base CAS reject or an unresolved merge conflict.
+        // Surface a focused message and refresh so the editor reloads with
+        // the current head — the user can re-apply their intent on top.
+        setError(
+          body.error === "merge_conflict"
+            ? "Merge conflict — someone else edited the same lines. Reload and reapply your changes."
+            : "Document changed since you opened it. Reload to see the latest version.",
+        );
+        return;
+      }
       setError(body.error || "save_failed");
       return;
     }

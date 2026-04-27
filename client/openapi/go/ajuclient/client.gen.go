@@ -81,6 +81,42 @@ func (e ChangeLogEntryOperation) Valid() bool {
 	}
 }
 
+// Defines values for DocumentUpdateConflictError.
+const (
+	MergeConflict DocumentUpdateConflictError = "merge_conflict"
+	StaleBaseHash DocumentUpdateConflictError = "stale_base_hash"
+)
+
+// Valid indicates whether the value is a known member of the DocumentUpdateConflictError enum.
+func (e DocumentUpdateConflictError) Valid() bool {
+	switch e {
+	case MergeConflict:
+		return true
+	case StaleBaseHash:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DocumentVersionsListDirection.
+const (
+	DocumentVersionsListDirectionNewest DocumentVersionsListDirection = "newest"
+	DocumentVersionsListDirectionOldest DocumentVersionsListDirection = "oldest"
+)
+
+// Valid indicates whether the value is a known member of the DocumentVersionsListDirection enum.
+func (e DocumentVersionsListDirection) Valid() bool {
+	switch e {
+	case DocumentVersionsListDirectionNewest:
+		return true
+	case DocumentVersionsListDirectionOldest:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RelatedDocumentReason.
 const (
 	Backlink  RelatedDocumentReason = "backlink"
@@ -132,6 +168,24 @@ const (
 func (e CreateDocumentParamsDeferIndex) Valid() bool {
 	switch e {
 	case N1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListDocumentVersionsParamsDirection.
+const (
+	ListDocumentVersionsParamsDirectionNewest ListDocumentVersionsParamsDirection = "newest"
+	ListDocumentVersionsParamsDirectionOldest ListDocumentVersionsParamsDirection = "oldest"
+)
+
+// Valid indicates whether the value is a known member of the ListDocumentVersionsParamsDirection enum.
+func (e ListDocumentVersionsParamsDirection) Valid() bool {
+	switch e {
+	case ListDocumentVersionsParamsDirectionNewest:
+		return true
+	case ListDocumentVersionsParamsDirectionOldest:
 		return true
 	default:
 		return false
@@ -226,8 +280,100 @@ type DocumentSummary struct {
 	WordCount *int       `json:"wordCount,omitempty"`
 }
 
+// DocumentUpdateConflict 409 response payload for /api/vault/update. Returned when the
+// supplied baseHash does not match the current head AND either no
+// baseContent was supplied (`error: stale_base_hash`) or the
+// attempted three-way merge had unresolved overlapping conflicts
+// (`error: merge_conflict`).
+type DocumentUpdateConflict struct {
+	// BaseContent Echoed baseContent — only present on `merge_conflict`.
+	BaseContent *string `json:"baseContent,omitempty"`
+
+	// BaseHash The baseHash the caller supplied (echoed back).
+	BaseHash *string `json:"baseHash,omitempty"`
+
+	// ConflictedContent Diff3 output with `<<<<<<<` / `=======` / `>>>>>>>` markers — only present on `merge_conflict`.
+	ConflictedContent *string                     `json:"conflictedContent,omitempty"`
+	Error             DocumentUpdateConflictError `json:"error"`
+
+	// HeadContent Current content on the server. Use as `theirs` in a client-side merge.
+	HeadContent string `json:"headContent"`
+
+	// HeadHash Current contentHash on the server.
+	HeadHash string  `json:"headHash"`
+	Message  *string `json:"message,omitempty"`
+
+	// MineContent The caller's content — only present on `merge_conflict`.
+	MineContent *string `json:"mineContent,omitempty"`
+}
+
+// DocumentUpdateConflictError defines model for DocumentUpdateConflict.Error.
+type DocumentUpdateConflictError string
+
+// DocumentVersion A single historical version with its full content. The hash echoed
+// as `contentHash` is the SHA-256 you can re-submit to /api/vault/update
+// as `baseHash` to rebase a write onto this version.
+type DocumentVersion struct {
+	ChangedBy       *string   `json:"changedBy,omitempty"`
+	Content         string    `json:"content"`
+	ContentHash     string    `json:"contentHash"`
+	CreatedAt       time.Time `json:"createdAt"`
+	Id              string    `json:"id"`
+	MergeParentHash *string   `json:"mergeParentHash,omitempty"`
+	Message         *string   `json:"message,omitempty"`
+	ParentHash      *string   `json:"parentHash,omitempty"`
+	Path            string    `json:"path"`
+	Source          string    `json:"source"`
+	VersionN        int       `json:"versionN"`
+}
+
+// DocumentVersionMeta One row from a document's append-only version history. `parentHash`
+// is null on the genesis row (insert / migration backfill).
+// `mergeParentHash` is non-null only on three-way-merge commits and
+// records the caller's `baseHash` so the history is a proper DAG.
+type DocumentVersionMeta struct {
+	ChangedBy       *string   `json:"changedBy,omitempty"`
+	ContentHash     string    `json:"contentHash"`
+	CreatedAt       time.Time `json:"createdAt"`
+	Id              string    `json:"id"`
+	MergeParentHash *string   `json:"mergeParentHash,omitempty"`
+	Message         *string   `json:"message,omitempty"`
+	ParentHash      *string   `json:"parentHash,omitempty"`
+	Source          string    `json:"source"`
+	VersionN        int       `json:"versionN"`
+}
+
+// DocumentVersionsList defines model for DocumentVersionsList.
+type DocumentVersionsList struct {
+	Direction DocumentVersionsListDirection `json:"direction"`
+
+	// HeadHash contentHash of the document's current head.
+	HeadHash   string                `json:"headHash"`
+	NextCursor *time.Time            `json:"nextCursor,omitempty"`
+	Path       string                `json:"path"`
+	Versions   []DocumentVersionMeta `json:"versions"`
+}
+
+// DocumentVersionsListDirection defines model for DocumentVersionsList.Direction.
+type DocumentVersionsListDirection string
+
 // DocumentWrite defines model for DocumentWrite.
 type DocumentWrite struct {
+	// BaseContent On update only. Exact content the caller had at read time.
+	// Required alongside baseHash for server-side three-way merge of
+	// concurrent edits to non-overlapping regions.
+	BaseContent *string `json:"baseContent,omitempty"`
+
+	// BaseHash On update only. SHA-256 contentHash of the version the caller
+	// had at read time. Enables compare-and-swap: server fast-paths
+	// when the hash still matches, attempts a three-way merge (when
+	// baseContent is also supplied) if it does not, and returns 409
+	// with the current head when the merge cannot be resolved.
+	//
+	// Omitting baseHash falls back to legacy force-write and the
+	// response carries a `Deprecation: true` header.
+	BaseHash *string `json:"baseHash,omitempty"`
+
 	// Content Markdown body including optional YAML frontmatter.
 	Content string `json:"content"`
 
@@ -424,6 +570,36 @@ type ReadDocumentParams struct {
 	Brain *BrainQuery `form:"brain,omitempty" json:"brain,omitempty"`
 	Path  Path        `form:"path" json:"path"`
 }
+
+// GetDocumentVersionParams defines parameters for GetDocumentVersion.
+type GetDocumentVersionParams struct {
+	// Brain Brain name. Omit to target the caller's default brain.
+	Brain *BrainQuery `form:"brain,omitempty" json:"brain,omitempty"`
+	Path  string      `form:"path" json:"path"`
+
+	// N 1-based version number from the history list.
+	N *int `form:"n,omitempty" json:"n,omitempty"`
+
+	// Hash SHA-256 content hash. Mutually exclusive with `n`.
+	Hash *string `form:"hash,omitempty" json:"hash,omitempty"`
+}
+
+// ListDocumentVersionsParams defines parameters for ListDocumentVersions.
+type ListDocumentVersionsParams struct {
+	// Brain Brain name. Omit to target the caller's default brain.
+	Brain *BrainQuery `form:"brain,omitempty" json:"brain,omitempty"`
+
+	// Path Vault path of the document.
+	Path  string `form:"path" json:"path"`
+	Limit *int   `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Cursor ISO timestamp from a previous response's `nextCursor`.
+	Cursor    *time.Time                           `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Direction *ListDocumentVersionsParamsDirection `form:"direction,omitempty" json:"direction,omitempty"`
+}
+
+// ListDocumentVersionsParamsDirection defines parameters for ListDocumentVersions.
+type ListDocumentVersionsParamsDirection string
 
 // ConfirmUploadJSONBody defines parameters for ConfirmUpload.
 type ConfirmUploadJSONBody struct {
@@ -671,6 +847,12 @@ type ClientInterface interface {
 	// ReadDocument request
 	ReadDocument(ctx context.Context, params *ReadDocumentParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// GetDocumentVersion request
+	GetDocumentVersion(ctx context.Context, params *GetDocumentVersionParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ListDocumentVersions request
+	ListDocumentVersions(ctx context.Context, params *ListDocumentVersionsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ConfirmUploadWithBody request with any body
 	ConfirmUploadWithBody(ctx context.Context, params *ConfirmUploadParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -838,6 +1020,30 @@ func (c *Client) DeleteDocument(ctx context.Context, params *DeleteDocumentParam
 
 func (c *Client) ReadDocument(ctx context.Context, params *ReadDocumentParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewReadDocumentRequest(c.Server, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetDocumentVersion(ctx context.Context, params *GetDocumentVersionParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetDocumentVersionRequest(c.Server, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListDocumentVersions(ctx context.Context, params *ListDocumentVersionsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListDocumentVersionsRequest(c.Server, params)
 	if err != nil {
 		return nil, err
 	}
@@ -1589,6 +1795,208 @@ func NewReadDocumentRequest(server string, params *ReadDocumentParams) (*http.Re
 					queryValues.Add(k, v2)
 				}
 			}
+		}
+
+		queryURL.RawQuery = queryValues.Encode()
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetDocumentVersionRequest generates requests for GetDocumentVersion
+func NewGetDocumentVersionRequest(server string, params *GetDocumentVersionParams) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/vault/document/version")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		queryValues := queryURL.Query()
+
+		if params.Brain != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "brain", *params.Brain, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if queryFrag, err := runtime.StyleParamWithOptions("form", true, "path", params.Path, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+			return nil, err
+		} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+			return nil, err
+		} else {
+			for k, v := range parsed {
+				for _, v2 := range v {
+					queryValues.Add(k, v2)
+				}
+			}
+		}
+
+		if params.N != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "n", *params.N, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.Hash != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "hash", *params.Hash, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		queryURL.RawQuery = queryValues.Encode()
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewListDocumentVersionsRequest generates requests for ListDocumentVersions
+func NewListDocumentVersionsRequest(server string, params *ListDocumentVersionsParams) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/vault/document/versions")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		queryValues := queryURL.Query()
+
+		if params.Brain != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "brain", *params.Brain, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if queryFrag, err := runtime.StyleParamWithOptions("form", true, "path", params.Path, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+			return nil, err
+		} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+			return nil, err
+		} else {
+			for k, v := range parsed {
+				for _, v2 := range v {
+					queryValues.Add(k, v2)
+				}
+			}
+		}
+
+		if params.Limit != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "limit", *params.Limit, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.Cursor != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "cursor", *params.Cursor, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: "date-time"}); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.Direction != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "direction", *params.Direction, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
 		}
 
 		queryURL.RawQuery = queryValues.Encode()
@@ -2540,6 +2948,12 @@ type ClientWithResponsesInterface interface {
 	// ReadDocumentWithResponse request
 	ReadDocumentWithResponse(ctx context.Context, params *ReadDocumentParams, reqEditors ...RequestEditorFn) (*ReadDocumentResponse, error)
 
+	// GetDocumentVersionWithResponse request
+	GetDocumentVersionWithResponse(ctx context.Context, params *GetDocumentVersionParams, reqEditors ...RequestEditorFn) (*GetDocumentVersionResponse, error)
+
+	// ListDocumentVersionsWithResponse request
+	ListDocumentVersionsWithResponse(ctx context.Context, params *ListDocumentVersionsParams, reqEditors ...RequestEditorFn) (*ListDocumentVersionsResponse, error)
+
 	// ConfirmUploadWithBodyWithResponse request with any body
 	ConfirmUploadWithBodyWithResponse(ctx context.Context, params *ConfirmUploadParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ConfirmUploadResponse, error)
 
@@ -2810,6 +3224,56 @@ func (r ReadDocumentResponse) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r ReadDocumentResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetDocumentVersionResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *DocumentVersion
+	JSON400      *BadRequest
+	JSON401      *Unauthorized
+	JSON404      *NotFound
+}
+
+// Status returns HTTPResponse.Status
+func (r GetDocumentVersionResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetDocumentVersionResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type ListDocumentVersionsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *DocumentVersionsList
+	JSON400      *BadRequest
+	JSON401      *Unauthorized
+	JSON404      *NotFound
+}
+
+// Status returns HTTPResponse.Status
+func (r ListDocumentVersionsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListDocumentVersionsResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -3104,6 +3568,7 @@ type UpdateDocumentResponse struct {
 	JSON401      *Unauthorized
 	JSON403      *Forbidden
 	JSON404      *NotFound
+	JSON409      *DocumentUpdateConflict
 }
 
 // Status returns HTTPResponse.Status
@@ -3217,6 +3682,24 @@ func (c *ClientWithResponses) ReadDocumentWithResponse(ctx context.Context, para
 		return nil, err
 	}
 	return ParseReadDocumentResponse(rsp)
+}
+
+// GetDocumentVersionWithResponse request returning *GetDocumentVersionResponse
+func (c *ClientWithResponses) GetDocumentVersionWithResponse(ctx context.Context, params *GetDocumentVersionParams, reqEditors ...RequestEditorFn) (*GetDocumentVersionResponse, error) {
+	rsp, err := c.GetDocumentVersion(ctx, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetDocumentVersionResponse(rsp)
+}
+
+// ListDocumentVersionsWithResponse request returning *ListDocumentVersionsResponse
+func (c *ClientWithResponses) ListDocumentVersionsWithResponse(ctx context.Context, params *ListDocumentVersionsParams, reqEditors ...RequestEditorFn) (*ListDocumentVersionsResponse, error) {
+	rsp, err := c.ListDocumentVersions(ctx, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListDocumentVersionsResponse(rsp)
 }
 
 // ConfirmUploadWithBodyWithResponse request with arbitrary body returning *ConfirmUploadResponse
@@ -3721,6 +4204,100 @@ func ParseReadDocumentResponse(rsp *http.Response) (*ReadDocumentResponse, error
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest Document
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetDocumentVersionResponse parses an HTTP response from a GetDocumentVersionWithResponse call
+func ParseGetDocumentVersionResponse(rsp *http.Response) (*GetDocumentVersionResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetDocumentVersionResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest DocumentVersion
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListDocumentVersionsResponse parses an HTTP response from a ListDocumentVersionsWithResponse call
+func ParseListDocumentVersionsResponse(rsp *http.Response) (*ListDocumentVersionsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListDocumentVersionsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest DocumentVersionsList
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
@@ -4262,6 +4839,13 @@ func ParseUpdateDocumentResponse(rsp *http.Response) (*UpdateDocumentResponse, e
 			return nil, err
 		}
 		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest DocumentUpdateConflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	}
 

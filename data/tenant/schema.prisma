@@ -39,6 +39,7 @@ model Brain {
   files      VaultFile[]
   changeLogs VaultChangeLog[]
   access     BrainAccess[]
+  versions   VaultDocumentVersion[]
 
   @@index([name])
   @@map("brains")
@@ -118,10 +119,11 @@ model VaultDocument {
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
-  brain         Brain            @relation(fields: [brainId], references: [id])
+  brain         Brain                   @relation(fields: [brainId], references: [id])
   changeLogs    VaultChangeLog[]
-  outgoingLinks DocumentLink[]   @relation("outgoing")
-  incomingLinks DocumentLink[]   @relation("incoming")
+  versions      VaultDocumentVersion[]
+  outgoingLinks DocumentLink[]          @relation("outgoing")
+  incomingLinks DocumentLink[]          @relation("incoming")
 
   @@unique([brainId, path])
   @@index([brainId])
@@ -130,6 +132,44 @@ model VaultDocument {
   @@index([docStatus])
   @@index([directory])
   @@map("vault_documents")
+}
+
+/// Append-only edit log for a vault document. One row per committed
+/// version; the parent hash chain links versions in order, with an
+/// optional second parent on three-way-merge commits.
+model VaultDocumentVersion {
+  id            String  @id @default(cuid())
+  brainId       String  @map("brain_id")
+  documentId    String  @map("document_id")
+  /// Denormalized so history queries don't need a join. Updated when
+  /// the parent document is renamed (rename hooks live in app code).
+  path          String
+  /// 1-based monotonic counter per documentId. Bumped on every commit.
+  versionN      Int     @map("version_n")
+  content       String  @db.Text
+  contentHash   String  @map("content_hash")
+  /// The contentHash of the version this commit replaced. Null only on
+  /// the very first version (insert / migration backfill seed).
+  parentHash    String? @map("parent_hash")
+  /// On three-way-merge commits, the contentHash of the OTHER parent
+  /// (the caller's `baseHash`). Null on linear commits. Together with
+  /// parentHash this gives a DAG so history traversal is unambiguous.
+  mergeParentHash String? @map("merge_parent_hash")
+  source        String
+  changedBy     String? @map("changed_by")
+  /// Optional commit message. Reserved for a future `aju update --message`
+  /// flag and the equivalent on web/MCP.
+  message       String?
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  brain    Brain         @relation(fields: [brainId], references: [id])
+  document VaultDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, versionN])
+  @@index([brainId])
+  @@index([brainId, contentHash])
+  @@index([brainId, path, createdAt])
+  @@map("vault_document_versions")
 }
 
 model DocumentLink {

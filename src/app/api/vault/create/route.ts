@@ -82,6 +82,21 @@ export const POST = authedTenantRoute(
         syncedAt: new Date(),
       },
     });
+    // Genesis version row — parentHash null, versionN = 1.
+    await tx.vaultDocumentVersion.create({
+      data: {
+        brainId: brain.brainId,
+        documentId: doc.id,
+        path,
+        versionN: 1,
+        content: parsed.content,
+        contentHash: parsed.contentHash,
+        parentHash: null,
+        mergeParentHash: null,
+        source,
+        changedBy: principal.identity,
+      },
+    });
     await tx.vaultChangeLog.create({
       data: {
         brainId: brain.brainId,
