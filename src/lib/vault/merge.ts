@@ -26,11 +26,14 @@ export function threeWayMerge(
   mine: string,
 ): ThreeWayMergeResult {
   // node-diff3's merge() treats `a` as mine (the local change being applied)
-  // and `b` as theirs (the upstream change). Output is the LF-joined
-  // sequence of merged lines. Set `excludeFalseConflicts` so identical
-  // edits on both sides collapse instead of conflicting.
+  // and `b` as theirs (the upstream change). Default `stringSeparator` is
+  // /\s+/ (token-level merge), which would explode markdown into one word
+  // per merge unit and produce surprising output. Force /\r?\n/ so the
+  // merge is line-based — that's the right granularity for prose / code.
+  // `excludeFalseConflicts` collapses identical edits on both sides.
   const result = diff3Merge<string>(mine, base, theirs, {
     excludeFalseConflicts: true,
+    stringSeparator: /\r?\n/,
   });
 
   const joined = result.result.join("\n");
