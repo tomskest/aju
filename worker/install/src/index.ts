@@ -13,6 +13,8 @@ const PLATFORMS: Array<{ key: string; suffix: string }> = [
   { key: "darwin_amd64", suffix: "darwin-amd64" },
   { key: "linux_arm64", suffix: "linux-arm64" },
   { key: "linux_amd64", suffix: "linux-amd64" },
+  { key: "windows_amd64", suffix: "windows-amd64.exe" },
+  { key: "windows_arm64", suffix: "windows-arm64.exe" },
 ];
 
 export default {
@@ -188,6 +190,8 @@ detect_os() {
   case "$uname_s" in
     Linux)  echo "linux" ;;
     Darwin) echo "darwin" ;;
+    MINGW*|MSYS*|CYGWIN*)
+      error "Windows shells (Git Bash / MSYS / Cygwin) aren't supported by this installer. Run the PowerShell installer in PowerShell instead: irm install.aju.sh/ps1 | iex" ;;
     *)      error "Unsupported OS: $uname_s" ;;
   esac
 }

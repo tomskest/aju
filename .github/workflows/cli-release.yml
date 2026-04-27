@@ -21,12 +21,22 @@ jobs:
         include:
           - goos: darwin
             goarch: arm64
+            binext: ""
           - goos: darwin
             goarch: amd64
+            binext: ""
           - goos: linux
             goarch: arm64
+            binext: ""
           - goos: linux
             goarch: amd64
+            binext: ""
+          - goos: windows
+            goarch: amd64
+            binext: ".exe"
+          - goos: windows
+            goarch: arm64
+            binext: ".exe"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -57,8 +67,9 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "0"
           VERSION: ${{ steps.version.outputs.version }}
+          BINEXT: ${{ matrix.binext }}
         run: |
-          OUT="aju-${GOOS}-${GOARCH}"
+          OUT="aju-${GOOS}-${GOARCH}${BINEXT}"
           go build -trimpath -ldflags "-s -w -X main.Version=${VERSION}" -o "../../dist/${OUT}" ./
           ls -la "../../dist/"
 
@@ -66,7 +77,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: aju-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/aju-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/aju-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.binext }}
           if-no-files-found: error
           retention-days: 7
 
@@ -101,4 +112,6 @@ jobs:
             dist/aju-darwin-amd64
             dist/aju-linux-arm64
             dist/aju-linux-amd64
+            dist/aju-windows-amd64.exe
+            dist/aju-windows-arm64.exe
             dist/checksums.txt
