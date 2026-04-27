@@ -144,7 +144,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
-  // User flow (original behavior): mint a personal key for the approver.
+  // User flow: mint a personal "device" key for the approver.
+  //
+  // Device keys carry the full scope set (incl. admin) — they represent the
+  // approver's interactive CLI session, equivalent in authority to their web
+  // login. The post-approval CLI uses this admin scope to mint per-org child
+  // keys (one profile per org) without a second device-flow round-trip.
+  //
+  // Named keys minted later via the dashboard / `aju keys create` can still
+  // be downscoped to read | write | delete via presets — those are the
+  // attenuated credential pattern. Device keys are the bootstrap.
   const { plaintext, prefix, hash } = generateApiKey();
 
   const apiKey = await prisma.apiKey.create({
@@ -154,6 +163,7 @@ export async function POST(req: NextRequest) {
       hash,
       name: keyName,
       userId: user.id,
+      scopes: ["read", "write", "delete", "admin"],
     },
   });
 

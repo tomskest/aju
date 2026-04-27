@@ -278,14 +278,22 @@ command warns and points you at the right profile or 'aju keys update'.`,
 	}
 
 	// Figure out whether the *current profile's key* actually binds into
-	// the target org. If yes, mirror the slug locally. If no, explain and
-	// leave the local pin alone so the user isn't lied to later.
+	// the target org. Three outcomes:
+	//   - active profile binds → just record the slug locally, done.
+	//   - another local profile binds → auto-switch to that profile so the
+	//     CLI's bearer key matches the slug. This makes `aju orgs switch`
+	//     behave the way users expect after `aju login` provisioned one
+	//     profile per org.
+	//   - no local profile binds → keep current profile, warn, point at
+	//     `aju keys update` to mint a key for this org.
 	bindings, err := resolveProfileBindings(client, cfg, &list)
 	if err != nil {
 		return printFriendlyErr(err)
 	}
 	activeProfile := cfg.Active
-	if boundProfile, ok := bindings[slug]; ok && boundProfile == activeProfile {
+	boundProfile, hasBinding := bindings[slug]
+
+	if hasBinding && boundProfile == activeProfile {
 		cfg.Profile().Org = slug
 		if err := config.Save(cfg); err != nil {
 			return err
@@ -294,18 +302,25 @@ command warns and points you at the right profile or 'aju keys update'.`,
 		return nil
 	}
 
+	if hasBinding {
+		// Auto-switch to the profile whose key binds to <slug>. The active
+		// profile becomes the one that can actually reach the new org.
+		cfg.SetActive(boundProfile)
+		cfg.Profile().Org = slug
+		cfg.DefaultProfile = boundProfile
+		if err := config.Save(cfg); err != nil {
+			return err
+		}
+		fmt.Printf("Switched to %s (profile: %s)\n", slug, boundProfile)
+		return nil
+	}
+
 	fmt.Printf("Server session switched to %s (affects web UI only).\n", slug)
 	fmt.Fprintln(os.Stderr,
 		"\nYour current CLI key is not bound to this org, so `aju <vault-op>` calls will still resolve to the key's original org.")
-	if otherProfile, ok := bindings[slug]; ok {
-		fmt.Fprintf(os.Stderr,
-			"A different profile (%q) has a key for %s. Switch to it:\n  aju profiles use %s\n",
-			otherProfile, slug, otherProfile)
-	} else {
-		fmt.Fprintf(os.Stderr,
-			"No local profile has a key for %s. Mint one with:\n  aju keys update\n",
-			slug)
-	}
+	fmt.Fprintf(os.Stderr,
+		"No local profile has a key for %s. Mint one with:\n  aju keys update\n",
+		slug)
 	return nil
 }
 

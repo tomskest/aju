@@ -157,6 +157,14 @@ named profile (or the currently-active profile).`,
 				} else {
 					fmt.Printf("Signed in (profile: %s).\n", cfg.Active)
 				}
+				// Auto-provision a profile per non-personal org the user
+				// belongs to. The device-flow key has admin scope so it can
+				// mint per-org child keys without a second auth round-trip.
+				// Non-fatal — login is "done" the moment the device key is
+				// saved; this is a UX layer on top.
+				if err := autoProvisionOrgProfiles(httpx.New(base, poll.APIKey), cfg); err != nil {
+					fmt.Fprintf(os.Stderr, "(could not auto-mint per-org keys: %v)\n", err)
+				}
 				return nil
 			case "denied":
 				fmt.Println("Authorization denied.")
@@ -176,11 +184,98 @@ named profile (or the currently-active profile).`,
 	}
 }
 
-// Logout clears the API key while preserving the server URL.
+// autoProvisionOrgProfiles mints a per-org child key for every org the
+// user belongs to that isn't already bound to a local profile. Run after
+// `aju login` so a multi-org user gets one profile per org with no further
+// prompts.
+//
+// The device-flow key (in `cfg`'s active profile) has admin scope, which is
+// what gates POST /api/keys; child keys themselves get the same scope set
+// so subsequent runs (e.g. after joining a new org) can also self-heal.
+//
+// Skips:
+//   - the user's personal org (the unpinned device-flow key already
+//     resolves there via the bearer auth fallback)
+//   - any org already bound to a local profile (idempotent re-runs)
+//   - any org whose slug collides with an existing profile name (the user
+//     can resolve manually with `aju keys update`)
+func autoProvisionOrgProfiles(client *httpx.Client, cfg *config.Config) error {
+	var list orgsListResp
+	if err := client.Get("/api/orgs", &list); err != nil {
+		return err
+	}
+	if len(list.Orgs) <= 1 {
+		return nil // single-org user — nothing to do
+	}
+
+	bindings, err := resolveProfileBindings(client, cfg, &list)
+	if err != nil {
+		return err
+	}
+
+	created := 0
+	for _, o := range list.Orgs {
+		if o.IsPersonal {
+			continue
+		}
+		if _, bound := bindings[o.Slug]; bound {
+			continue
+		}
+		if _, exists := cfg.Profiles[o.Slug]; exists {
+			continue
+		}
+
+		body := keysCreateReq{
+			Name:           fmt.Sprintf("cli (%s)", o.Slug),
+			Scopes:         []string{"read", "write", "delete", "admin"},
+			OrganizationID: o.ID,
+		}
+		var resp keysCreateResp
+		if err := client.Post("/api/keys", body, &resp); err != nil {
+			fmt.Fprintf(os.Stderr, "(skip %s: %v)\n", o.Slug, err)
+			continue
+		}
+		if resp.Plaintext == "" {
+			continue
+		}
+		if cfg.Profiles == nil {
+			cfg.Profiles = map[string]*config.Profile{}
+		}
+		cfg.Profiles[o.Slug] = &config.Profile{
+			Server: cfg.Profile().Server,
+			Key:    resp.Plaintext,
+			Org:    o.Slug,
+		}
+		created++
+	}
+
+	if created == 0 {
+		return nil
+	}
+	if err := config.Save(cfg); err != nil {
+		return err
+	}
+	noun := "profile"
+	if created > 1 {
+		noun = "profiles"
+	}
+	fmt.Printf("Provisioned %d additional %s. Switch with `aju orgs switch <slug>`.\n", created, noun)
+	return nil
+}
+
+// Logout revokes every per-org key minted by `aju login` and clears them
+// from the local config. Server URLs and other profile fields are kept
+// so a future `aju login` re-uses the same layout.
+//
+// Revocation is best-effort: if a key is already revoked server-side, or
+// the server is unreachable, we still clear the local state so the device
+// stops carrying credentials. The user can clean up dangling rows from
+// the dashboard.
 func Logout(args []string) error {
 	if anyHelpArg(args) {
-		fmt.Print(`Clear the API key from the active profile. Preserves the server URL and
-other profile fields so you can re-login with ` + "`aju login`" + ` later.
+		fmt.Print(`Revoke every API key minted into a local profile and clear them from
+the config. Preserves server URLs so a future ` + "`aju login`" + ` reuses the same
+layout.
 
 Usage:
   aju logout
@@ -191,15 +286,91 @@ Usage:
 	if err != nil {
 		return err
 	}
-	if cfg.Profile().Key == "" {
+
+	// Collect every (profile, prefix) that has a non-empty key. Capturing
+	// the prefix up front lets us tolerate the local plaintext being cleared
+	// after a partial failure on a previous run.
+	type localKey struct{ profile, prefix string }
+	var locals []localKey
+	for name, p := range cfg.Profiles {
+		if p == nil || p.Key == "" {
+			continue
+		}
+		prefix := p.Key
+		if len(prefix) > 12 {
+			prefix = prefix[:12]
+		}
+		locals = append(locals, localKey{profile: name, prefix: prefix})
+	}
+	if len(locals) == 0 {
 		fmt.Println("Not signed in.")
 		return nil
 	}
-	cfg.Profile().Key = ""
+
+	// Use the active profile's key (or any working one) to drive the
+	// revocation calls. /api/keys lists every key belonging to the user
+	// regardless of org pin, so one authenticated request finds them all.
+	driverKey := cfg.Profile().Key
+	if driverKey == "" {
+		// Fall back to any non-empty profile key.
+		for _, p := range cfg.Profiles {
+			if p != nil && p.Key != "" {
+				driverKey = p.Key
+				break
+			}
+		}
+	}
+
+	revoked, failed := 0, 0
+	if driverKey != "" {
+		client := httpx.New(cfg.ServerURL(), driverKey)
+
+		var list keysListResp
+		if err := client.Get("/api/keys", &list); err != nil {
+			fmt.Fprintf(os.Stderr, "(could not list server keys: %v — clearing local state anyway)\n", err)
+		} else {
+			prefixToID := make(map[string]string, len(list.Keys))
+			for _, k := range list.Keys {
+				if k.RevokedAt != "" {
+					continue
+				}
+				prefixToID[k.Prefix] = k.ID
+			}
+			for _, l := range locals {
+				id, ok := prefixToID[l.prefix]
+				if !ok {
+					// Already revoked or never existed server-side; nothing to do.
+					continue
+				}
+				if err := client.Do("DELETE", "/api/keys/"+id, nil, nil); err != nil {
+					fmt.Fprintf(os.Stderr, "(failed to revoke %s [profile %s]: %v)\n", l.prefix, l.profile, err)
+					failed++
+					continue
+				}
+				revoked++
+			}
+		}
+	}
+
+	// Clear local state regardless of server-side outcome — the user said
+	// "log out", so the device should stop carrying credentials.
+	for _, l := range locals {
+		if p := cfg.Profiles[l.profile]; p != nil {
+			p.Key = ""
+		}
+	}
 	if err := config.Save(cfg); err != nil {
 		return err
 	}
-	fmt.Println("Signed out.")
+
+	switch {
+	case revoked > 0 && failed == 0:
+		fmt.Printf("Signed out. Revoked %d key(s).\n", revoked)
+	case revoked > 0 && failed > 0:
+		fmt.Printf("Signed out. Revoked %d key(s); %d failed (cleared locally anyway).\n", revoked, failed)
+	default:
+		fmt.Println("Signed out (local state cleared).")
+	}
 	return nil
 }
 
