@@ -5,7 +5,12 @@ import { useState } from "react";
 
 type Props = {
   token: string;
-  orgSlug: string;
+};
+
+type AcceptResponse = {
+  ok?: boolean;
+  organizationId?: string;
+  organizationSlug?: string;
 };
 
 /**
@@ -15,7 +20,7 @@ type Props = {
  * browser via a full navigation (`window.location`) so the active-org cookie
  * the accept route sets is picked up by the next render.
  */
-export default function AcceptControls({ token, orgSlug }: Props) {
+export default function AcceptControls({ token }: Props) {
   const router = useRouter();
   const [busy, setBusy] = useState<"accept" | "decline" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -45,9 +50,17 @@ export default function AcceptControls({ token, orgSlug }: Props) {
         }
         throw new Error(body?.error ?? `accept failed (${res.status})`);
       }
+      // /app/orgs/[id] looks up by organization id, not slug, so use the
+      // id the API now returns. Older API responses without the id still
+      // get a useful destination via /app/brains (the new active org's
+      // brain index — works regardless of org-overview URL shape).
+      const body = (await res.json().catch(() => null)) as AcceptResponse | null;
+      const orgId = body?.organizationId ?? null;
       // Use a real navigation so the freshly-set active-org cookie ships
       // with the next request.
-      window.location.href = `/app/orgs/${orgSlug}`;
+      window.location.href = orgId
+        ? `/app/orgs/${orgId}`
+        : `/app/brains`;
     } catch (e) {
       setError(e instanceof Error ? e.message : "something went wrong");
       setBusy(null);

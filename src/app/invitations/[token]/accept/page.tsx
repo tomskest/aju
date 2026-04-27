@@ -33,7 +33,7 @@ export default async function AcceptInvitationPage({
     ? await prisma.invitation.findUnique({
         where: { tokenHash: hashInviteToken(token) },
         include: {
-          organization: { select: { name: true, slug: true } },
+          organization: { select: { name: true } },
         },
       })
     : null;
@@ -57,7 +57,6 @@ export default async function AcceptInvitationPage({
         <AcceptCard
           token={token}
           orgName={invitation.organization.name}
-          orgSlug={invitation.organization.slug}
           role={invitation.role}
           inviterName={await resolveInviterLabel(invitation.createdBy)}
           expiresAt={invitation.expiresAt}
@@ -192,14 +191,12 @@ function EmailMismatch({ expectedEmail }: { expectedEmail: string }) {
 function AcceptCard({
   token,
   orgName,
-  orgSlug,
   role,
   inviterName,
   expiresAt,
 }: {
   token: string;
   orgName: string;
-  orgSlug: string;
   role: string;
   inviterName: string | null;
   expiresAt: Date;
@@ -233,7 +230,7 @@ function AcceptCard({
           </Row>
         </dl>
         <div className="mt-6">
-          <AcceptControls token={token} orgSlug={orgSlug} />
+          <AcceptControls token={token} />
         </div>
       </div>
     </div>

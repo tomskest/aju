@@ -103,6 +103,10 @@ export async function POST(
 
   return NextResponse.json({
     ok: true,
+    // Both shapes returned: id is what /app/orgs/[id] expects (the
+    // landing page after accept) — slug is kept for any older client
+    // build still pinned to it.
+    organizationId: invitation.organization.id,
     organizationSlug: invitation.organization.slug,
   });
 }
