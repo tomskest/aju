@@ -120,20 +120,34 @@ export default function OrgSwitcher() {
       }
       setOpen(false);
       setBusyId(null);
-      // Brain pages are scoped to a specific org — the brain name in the
-      // current URL almost certainly doesn't exist in the new org, which
-      // produces a 404 on plain refresh. Navigate to the safe brains
-      // index for the new org instead. Org-neutral routes (keys, usage,
-      // agents) just need a refresh — they re-query against the new
-      // active org cookie.
+      // Hard-navigate after switching orgs. Two reasons we can't rely on
+      // the soft router here:
+      //   1. The current URL may be invalid in the new org (e.g.
+      //      /app/brain/<name> for a brain that only exists in the
+      //      previous org → 404 on refresh).
+      //   2. Even when the URL is valid, app-router caches server
+      //      components across client-side navigations. The brain rail
+      //      in (brain)/layout.tsx is a server layout — it sits at a
+      //      stable segment boundary so Next reuses its render between
+      //      navigations and the org-cookie change underneath isn't
+      //      picked up. router.refresh() doesn't reliably bust this.
+      //
+      // window.location.assign forces a full document reload, which
+      // re-evaluates every server component against the freshly-set
+      // active-org cookie.
       const path =
         typeof window !== "undefined" ? window.location.pathname : "";
-      if (path.startsWith("/app/brain/") || path === "/app/brain") {
-        router.push("/app/brains");
-      } else {
-        router.refresh();
+      const target =
+        path.startsWith("/app/brain/") || path === "/app/brain"
+          ? "/app/brains"
+          : path;
+      if (typeof window !== "undefined") {
+        window.location.assign(target);
+        return;
       }
-      // Refresh the list so the active marker moves.
+      // Fallback (no window — won't be hit in a real client render).
+      router.push(target);
+      router.refresh();
       loadOrgs();
     } catch {
       setError("failed to switch org");
