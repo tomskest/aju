@@ -15,7 +15,11 @@ const STEPS: Step[] = [
       <>
         One line, no dependencies beyond a POSIX shell. The installer writes a
         single binary to <code className="font-mono text-[12.5px] text-[var(--color-ink)]">~/.local/bin/aju</code>{" "}
-        and adds it to your path if needed.
+        and adds it to your path if needed. On Windows, run{" "}
+        <code className="font-mono text-[12.5px] text-[var(--color-ink)]">
+          irm install.aju.sh/ps1 | iex
+        </code>{" "}
+        in PowerShell instead.
       </>
     ),
     command: "curl -fsSL install.aju.sh | sh",
@@ -83,8 +87,8 @@ export default function GettingStartedPage() {
           From zero to a working brain in five commands.
         </h1>
         <p className="text-[14.5px] leading-relaxed text-[var(--color-muted)]">
-          This walkthrough assumes macOS or Linux with a recent shell. Windows
-          users can install via WSL or use the MCP server directly.
+          Works on macOS, Linux, and Windows. The shell commands below assume a
+          POSIX shell — the Windows equivalent is called out in step 1.
         </p>
       </header>
 
