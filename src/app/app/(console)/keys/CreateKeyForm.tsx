@@ -3,12 +3,27 @@
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 
-type ScopeValue = "read" | "write" | "admin";
+type ScopeValue = "read" | "write" | "delete" | "admin";
 
 const ALL_SCOPES: ReadonlyArray<{ value: ScopeValue; label: string; hint: string }> = [
   { value: "read", label: "read", hint: "list + read notes, files, embeddings" },
-  { value: "write", label: "write", hint: "create + update + delete notes" },
-  { value: "admin", label: "admin", hint: "manage brains, keys, org settings" },
+  { value: "write", label: "write", hint: "create + update notes and files" },
+  { value: "delete", label: "delete", hint: "delete notes, files, document versions" },
+  { value: "admin", label: "admin", hint: "manage brains, keys, agents, memberships" },
+];
+
+type Preset = "reader" | "editor" | "operator" | "owner" | "custom";
+
+const PRESETS: ReadonlyArray<{
+  value: Exclude<Preset, "custom">;
+  label: string;
+  hint: string;
+  scopes: ScopeValue[];
+}> = [
+  { value: "reader",   label: "reader",   hint: "read-only — perfect for backup, audit, public share keys", scopes: ["read"] },
+  { value: "editor",   label: "editor",   hint: "read + write (recommended for most CLI / MCP use)",        scopes: ["read", "write"] },
+  { value: "operator", label: "operator", hint: "editor + delete — full vault access",                       scopes: ["read", "write", "delete"] },
+  { value: "owner",    label: "owner",    hint: "full access incl. brain / key / agent management",          scopes: ["read", "write", "delete", "admin"] },
 ];
 
 export type OrgOption = {
@@ -50,7 +65,16 @@ export default function CreateKeyForm({
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
-  const [scopes, setScopes] = useState<ScopeValue[]>(["read", "write"]);
+  const [preset, setPreset] = useState<Preset>("editor");
+  const [customScopes, setCustomScopes] = useState<ScopeValue[]>([
+    "read",
+    "write",
+  ]);
+  const presetScopes =
+    preset === "custom"
+      ? customScopes
+      : (PRESETS.find((p) => p.value === preset)?.scopes ?? ["read", "write"]);
+  const scopes = presetScopes;
   const [expiresDays, setExpiresDays] = useState("");
   const [organizationId, setOrganizationId] = useState<string>(
     defaultOrgId ?? orgs[0]?.id ?? "",
@@ -62,14 +86,15 @@ export default function CreateKeyForm({
   const [, startTransition] = useTransition();
 
   function toggleScope(value: ScopeValue) {
-    setScopes((curr) =>
+    setCustomScopes((curr) =>
       curr.includes(value) ? curr.filter((s) => s !== value) : [...curr, value],
     );
   }
 
   function reset() {
     setName("");
-    setScopes(["read", "write"]);
+    setPreset("editor");
+    setCustomScopes(["read", "write"]);
     setExpiresDays("");
     setOrganizationId(defaultOrgId ?? orgs[0]?.id ?? "");
     setError(null);
@@ -106,15 +131,16 @@ export default function CreateKeyForm({
 
     setSubmitting(true);
     try {
+      // Send preset by default; only fall back to a raw scopes array when
+      // the user opted into Custom. Server accepts either.
+      const payload =
+        preset === "custom"
+          ? { name: trimmed, scopes, expiresInDays, organizationId }
+          : { name: trimmed, preset, expiresInDays, organizationId };
       const res = await fetch("/api/keys", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: trimmed,
-          scopes,
-          expiresInDays,
-          organizationId,
-        }),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         const data = (await res.json().catch(() => ({}))) as { error?: unknown };
@@ -234,32 +260,77 @@ export default function CreateKeyForm({
 
       <fieldset className="flex flex-col gap-2">
         <legend className="font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--color-muted)]">
-          scopes
+          access level
         </legend>
         <div className="flex flex-col gap-1.5">
-          {ALL_SCOPES.map((s) => (
+          {PRESETS.map((p) => (
             <label
-              key={s.value}
+              key={p.value}
               className="flex cursor-pointer items-start gap-3 rounded-md border border-white/10 bg-[var(--color-bg)] px-3 py-2 transition hover:border-white/20"
             >
               <input
-                type="checkbox"
-                checked={scopes.includes(s.value)}
-                onChange={() => toggleScope(s.value)}
+                type="radio"
+                name="key-preset"
+                checked={preset === p.value}
+                onChange={() => setPreset(p.value)}
                 disabled={submitting}
                 className="mt-1 size-3.5 accent-[var(--color-accent)]"
               />
               <span className="flex flex-col gap-0.5">
                 <span className="font-mono text-[12px] uppercase tracking-[0.18em] text-[var(--color-ink)]">
-                  {s.label}
+                  {p.label}
                 </span>
                 <span className="text-[11px] leading-5 text-[var(--color-muted)]">
-                  {s.hint}
+                  {p.hint}
                 </span>
               </span>
             </label>
           ))}
+          <label className="flex cursor-pointer items-start gap-3 rounded-md border border-white/10 bg-[var(--color-bg)] px-3 py-2 transition hover:border-white/20">
+            <input
+              type="radio"
+              name="key-preset"
+              checked={preset === "custom"}
+              onChange={() => setPreset("custom")}
+              disabled={submitting}
+              className="mt-1 size-3.5 accent-[var(--color-accent)]"
+            />
+            <span className="flex flex-col gap-0.5">
+              <span className="font-mono text-[12px] uppercase tracking-[0.18em] text-[var(--color-ink)]">
+                custom
+              </span>
+              <span className="text-[11px] leading-5 text-[var(--color-muted)]">
+                pick individual scopes (advanced)
+              </span>
+            </span>
+          </label>
         </div>
+        {preset === "custom" && (
+          <div className="mt-2 flex flex-col gap-1.5 border-l-2 border-white/10 pl-3">
+            {ALL_SCOPES.map((s) => (
+              <label
+                key={s.value}
+                className="flex cursor-pointer items-start gap-3 rounded-md px-2 py-1 transition hover:bg-white/[0.03]"
+              >
+                <input
+                  type="checkbox"
+                  checked={customScopes.includes(s.value)}
+                  onChange={() => toggleScope(s.value)}
+                  disabled={submitting}
+                  className="mt-1 size-3.5 accent-[var(--color-accent)]"
+                />
+                <span className="flex flex-col gap-0.5">
+                  <span className="font-mono text-[12px] uppercase tracking-[0.18em] text-[var(--color-ink)]">
+                    {s.label}
+                  </span>
+                  <span className="text-[11px] leading-5 text-[var(--color-muted)]">
+                    {s.hint}
+                  </span>
+                </span>
+              </label>
+            ))}
+          </div>
+        )}
       </fieldset>
 
       <label className="flex flex-col gap-1">

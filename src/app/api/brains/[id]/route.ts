@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { Prisma as PrismaTenant } from "@prisma/client-tenant";
 import { authenticate, isAuthError, type AuthSuccess } from "@/lib/auth";
+import { requireScope } from "@/lib/route-helpers";
 import { prisma, tenantDbFor } from "@/lib/db";
 import { withTenant } from "@/lib/tenant";
 import { getActiveOrganizationId } from "@/lib/auth";
@@ -149,6 +150,9 @@ export async function PATCH(req: NextRequest, ctx: RouteContext) {
   const auth = await authenticate(req);
   if (isAuthError(auth)) return auth;
 
+  const scopeDenied = requireScope(auth, "admin");
+  if (scopeDenied) return scopeDenied;
+
   const organizationId = await resolveOrgId(auth);
   if (!organizationId) return notFound();
 
@@ -208,6 +212,9 @@ export async function PATCH(req: NextRequest, ctx: RouteContext) {
 export async function DELETE(req: NextRequest, ctx: RouteContext) {
   const auth = await authenticate(req);
   if (isAuthError(auth)) return auth;
+
+  const scopeDenied = requireScope(auth, "admin");
+  if (scopeDenied) return scopeDenied;
 
   const organizationId = await resolveOrgId(auth);
   if (!organizationId) return notFound();

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { withTenant } from "@/lib/tenant";
 import { currentAuth } from "@/lib/auth";
 import { canManageMembers, type OrgRole } from "@/lib/tenant";
+import { requireScope } from "@/lib/route-helpers";
 
 export const runtime = "nodejs";
 
@@ -96,6 +97,9 @@ export async function POST(req: NextRequest) {
   });
   if (!membership) return forbidden();
   if (!canManageMembers(membership.role as OrgRole)) return forbidden();
+
+  const scopeDenied = requireScope(auth, "admin");
+  if (scopeDenied) return scopeDenied;
 
   let body: CreatePayload;
   try {

@@ -58,4 +58,5 @@ export const POST = authedTenantRoute(
 
     return { deleted: path };
   },
+  { requiresScope: "delete" },
 );

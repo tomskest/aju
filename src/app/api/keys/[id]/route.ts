@@ -55,4 +55,5 @@ export const DELETE = authedUserRoute<{ id: string }>(
 
     return new NextResponse(null, { status: 204 });
   },
+  { requiresScope: "admin" },
 );

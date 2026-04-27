@@ -72,6 +72,7 @@ const SAMPLE_ROW = {
   agentId: null,
   revokedAt: null,
   expiresAt: null,
+  scopes: ["read", "write"] as unknown,
 };
 
 // ── Tests ───────────────────────────────────────────────
@@ -173,6 +174,79 @@ describe("authenticate", () => {
     expect(res.apiKeyId).toBe(SAMPLE_ROW.id);
     expect(res.organizationId).toBe(SAMPLE_ROW.organizationId);
     expect(res.role).toBe("member");
+    expect(res.scopes).toEqual(["read", "write"]);
+  });
+
+  describe("scopes propagation", () => {
+    it("propagates a read-only scope from the DB row", async () => {
+      dbMock.prisma.apiKey.findUnique.mockResolvedValueOnce({
+        ...SAMPLE_ROW,
+        scopes: ["read"],
+      });
+      apiKeyMock.verifyApiKey.mockReturnValueOnce(true);
+      dbMock.prisma.user.findUnique.mockResolvedValueOnce(SAMPLE_USER);
+
+      const { authenticate, isAuthError } = await loadSubject();
+      const res = await authenticate(
+        makeReq({ authorization: `Bearer ${SAMPLE_DB_TOKEN}` }) as never,
+      );
+      expect(isAuthError(res)).toBe(false);
+      if (isAuthError(res)) return;
+      expect(res.scopes).toEqual(["read"]);
+    });
+
+    it("propagates the full operator+admin set when the row carries all four", async () => {
+      dbMock.prisma.apiKey.findUnique.mockResolvedValueOnce({
+        ...SAMPLE_ROW,
+        scopes: ["read", "write", "delete", "admin"],
+      });
+      apiKeyMock.verifyApiKey.mockReturnValueOnce(true);
+      dbMock.prisma.user.findUnique.mockResolvedValueOnce(SAMPLE_USER);
+
+      const { authenticate, isAuthError } = await loadSubject();
+      const res = await authenticate(
+        makeReq({ authorization: `Bearer ${SAMPLE_DB_TOKEN}` }) as never,
+      );
+      expect(isAuthError(res)).toBe(false);
+      if (isAuthError(res)) return;
+      expect(new Set(res.scopes)).toEqual(
+        new Set(["read", "write", "delete", "admin"]),
+      );
+    });
+
+    it("falls back to read+write when scopes column is malformed", async () => {
+      dbMock.prisma.apiKey.findUnique.mockResolvedValueOnce({
+        ...SAMPLE_ROW,
+        scopes: "not-an-array",
+      });
+      apiKeyMock.verifyApiKey.mockReturnValueOnce(true);
+      dbMock.prisma.user.findUnique.mockResolvedValueOnce(SAMPLE_USER);
+
+      const { authenticate, isAuthError } = await loadSubject();
+      const res = await authenticate(
+        makeReq({ authorization: `Bearer ${SAMPLE_DB_TOKEN}` }) as never,
+      );
+      expect(isAuthError(res)).toBe(false);
+      if (isAuthError(res)) return;
+      expect(res.scopes).toEqual(["read", "write"]);
+    });
+
+    it("drops unknown scope values from the row", async () => {
+      dbMock.prisma.apiKey.findUnique.mockResolvedValueOnce({
+        ...SAMPLE_ROW,
+        scopes: ["read", "wat", "write"],
+      });
+      apiKeyMock.verifyApiKey.mockReturnValueOnce(true);
+      dbMock.prisma.user.findUnique.mockResolvedValueOnce(SAMPLE_USER);
+
+      const { authenticate, isAuthError } = await loadSubject();
+      const res = await authenticate(
+        makeReq({ authorization: `Bearer ${SAMPLE_DB_TOKEN}` }) as never,
+      );
+      expect(isAuthError(res)).toBe(false);
+      if (isAuthError(res)) return;
+      expect(new Set(res.scopes)).toEqual(new Set(["read", "write"]));
+    });
   });
 
   describe("env-var fallback", () => {
@@ -188,6 +262,10 @@ describe("authenticate", () => {
       if (isAuthError(res)) return;
       expect(res.identity).toBe("admin");
       expect(res.role).toBe("admin");
+      // Legacy single-tenant ops keys aren't credential-capped.
+      expect(new Set(res.scopes)).toEqual(
+        new Set(["read", "write", "delete", "admin"]),
+      );
     });
 
     it("rejects a wrong-value legacy token", async () => {

@@ -201,4 +201,5 @@ export const POST = authedTenantRoute(
       { headers },
     );
   },
+  { requiresScope: "write" },
 );

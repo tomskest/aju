@@ -34,6 +34,7 @@ import { prisma } from "@/lib/db";
 import { currentAuth } from "@/lib/auth";
 import { withTenant } from "@/lib/tenant";
 import type { OrgRole } from "@/lib/tenant";
+import type { ApiKeyScope } from "@/lib/validators";
 
 type TenantTx = PrismaTenant.TransactionClient;
 
@@ -49,6 +50,29 @@ function forbidden() {
 
 function noActiveOrg() {
   return NextResponse.json({ error: "no_active_org" }, { status: 400 });
+}
+
+function insufficientScope(needed: ApiKeyScope) {
+  return NextResponse.json(
+    { error: "insufficient_scope", needed },
+    { status: 403 },
+  );
+}
+
+/**
+ * Inline scope guard for legacy routes that don't use `authedTenantRoute`
+ * (e.g. routes that manage their own connection/transaction lifecycle).
+ * Returns `null` when the caller has the required scope, or a 403
+ * NextResponse otherwise — match the call site to short-circuit:
+ *
+ *   const denied = requireScope(auth, "write");
+ *   if (denied) return denied;
+ */
+export function requireScope(
+  auth: { scopes: ApiKeyScope[] },
+  needed: ApiKeyScope,
+): NextResponse | null {
+  return auth.scopes.includes(needed) ? null : insufficientScope(needed);
 }
 
 /**
@@ -70,6 +94,7 @@ function asAuthSuccess(args: {
   role: OrgRole;
   agentId?: string;
   apiKeyId?: string;
+  scopes: ApiKeyScope[];
 }): AuthSuccess {
   return {
     identity: args.agentId ? `agent:${args.agentId}` : args.user.email,
@@ -79,6 +104,7 @@ function asAuthSuccess(args: {
     apiKeyId: args.apiKeyId,
     organizationId: args.organizationId,
     agentId: args.agentId,
+    scopes: args.scopes,
   };
 }
 
@@ -114,6 +140,14 @@ export type TenantHandlerOpts = {
   unscoped?: boolean;
   /** Override the interactive-transaction timeout. */
   timeoutMs?: number;
+  /**
+   * Credential capability required to call this route (default "read").
+   * Checked AFTER auth + membership but BEFORE opening the tenant tx, so a
+   * scope mismatch short-circuits with no DB work. The BrainAccess.role
+   * check inside the handler (e.g. `canWrite(brain)`) is independent —
+   * both gates must pass.
+   */
+  requiresScope?: ApiKeyScope;
 };
 
 /**
@@ -129,12 +163,13 @@ export function authedTenantRoute<TParams = Record<string, never>>(
   routeCtx: { params: Promise<TParams> },
 ) => Promise<NextResponse> {
   const minRole: OrgRole = opts.minRole ?? "member";
+  const requiresScope: ApiKeyScope = opts.requiresScope ?? "read";
 
   return async (req, routeCtx) => {
     const auth = await currentAuth(req);
     if (!auth) return unauthorized();
 
-    const { user, organizationId, agentId, apiKeyId } = auth;
+    const { user, organizationId, agentId, apiKeyId, scopes } = auth;
     if (!organizationId) return noActiveOrg();
 
     const membership = await prisma.organizationMembership.findFirst({
@@ -146,8 +181,17 @@ export function authedTenantRoute<TParams = Record<string, never>>(
     const role = membership.role as OrgRole;
     if (ROLE_RANK[role] < ROLE_RANK[minRole]) return forbidden();
 
+    if (!scopes.includes(requiresScope)) return insufficientScope(requiresScope);
+
     const params = (await routeCtx.params) as TParams;
-    const principal = asAuthSuccess({ user, organizationId, role, agentId, apiKeyId });
+    const principal = asAuthSuccess({
+      user,
+      organizationId,
+      role,
+      agentId,
+      apiKeyId,
+      scopes,
+    });
 
     return withTenant(
       {
@@ -197,6 +241,11 @@ export type UserHandlerCtx<TParams = Record<string, never>> = {
   params: TParams;
 };
 
+export type UserHandlerOpts = {
+  /** Credential capability required (default "read"). */
+  requiresScope?: ApiKeyScope;
+};
+
 /**
  * Wrap a route that only needs a signed-in user, without org/tenant scoping.
  * Useful for self-service endpoints (e.g. listing the user's own API keys,
@@ -204,13 +253,19 @@ export type UserHandlerCtx<TParams = Record<string, never>> = {
  */
 export function authedUserRoute<TParams = Record<string, never>>(
   handler: (ctx: UserHandlerCtx<TParams>) => Promise<unknown>,
+  opts: UserHandlerOpts = {},
 ): (
   req: NextRequest,
   routeCtx: { params: Promise<TParams> },
 ) => Promise<NextResponse> {
+  const requiresScope: ApiKeyScope = opts.requiresScope ?? "read";
+
   return async (req, routeCtx) => {
     const auth = await currentAuth(req);
     if (!auth) return unauthorized();
+    if (!auth.scopes.includes(requiresScope)) {
+      return insufficientScope(requiresScope);
+    }
 
     const params = (await routeCtx.params) as TParams;
 
@@ -254,6 +309,11 @@ export type OrgHandlerOpts = {
    * caller is a member of that org. Otherwise the active org is used.
    */
   orgIdParam?: string;
+  /**
+   * Credential capability required (default "read"). Most org routes that
+   * mutate (create invite, change role, delete domain) should set "admin".
+   */
+  requiresScope?: ApiKeyScope;
 };
 
 /**
@@ -270,6 +330,7 @@ export function authedOrgRoute<TParams = Record<string, never>>(
   routeCtx: { params: Promise<TParams> },
 ) => Promise<NextResponse> {
   const minRole: OrgRole = opts.minRole ?? "member";
+  const requiresScope: ApiKeyScope = opts.requiresScope ?? "read";
 
   return async (req, routeCtx) => {
     const auth = await currentAuth(req);
@@ -304,6 +365,10 @@ export function authedOrgRoute<TParams = Record<string, never>>(
 
     const role = membership.role as OrgRole;
     if (ROLE_RANK[role] < ROLE_RANK[minRole]) return forbidden();
+
+    if (!auth.scopes.includes(requiresScope)) {
+      return insufficientScope(requiresScope);
+    }
 
     try {
       const result = await handler({

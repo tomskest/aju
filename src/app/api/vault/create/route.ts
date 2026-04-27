@@ -137,4 +137,5 @@ export const POST = authedTenantRoute(
 
     return NextResponse.json(doc, { status: 201 });
   },
+  { requiresScope: "write" },
 );

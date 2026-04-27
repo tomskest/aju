@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { withTenant } from "@/lib/tenant";
 import { getActiveOrganizationId } from "@/lib/auth";
 import { enforceBrainsLimit } from "@/lib/billing";
+import { requireScope } from "@/lib/route-helpers";
 
 export const runtime = "nodejs";
 
@@ -156,6 +157,9 @@ export async function POST(req: NextRequest) {
       { status: 401 },
     );
   }
+
+  const scopeDenied = requireScope(auth, "admin");
+  if (scopeDenied) return scopeDenied;
 
   const body = (await req.json().catch(() => ({}))) as CreatePayload;
   const rawName = typeof body.name === "string" ? body.name.trim() : "";

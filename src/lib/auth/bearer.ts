@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { timingSafeEqual } from "crypto";
 import { prisma } from "@/lib/db";
 import { verifyApiKey } from "./api-key";
+import {
+  ALL_API_KEY_SCOPES,
+  type ApiKeyScope,
+} from "@/lib/validators/primitives";
 
 /**
  * API-key authentication for the vault routes.
@@ -38,11 +42,35 @@ export type AuthSuccess = {
   // present — it's the human who owns/minted the key for audit purposes —
   // but they are not the principal doing this request.
   agentId?: string;
+  // Credential-level capability cap. Route helpers enforce
+  // `auth.scopes.includes(requiresScope)` before opening a tenant tx. The
+  // BrainAccess.role check still runs inside handlers — both layers must
+  // pass. Env-var keys and cookie sessions get the full set.
+  scopes: ApiKeyScope[];
 };
 export type AuthResult = AuthSuccess | NextResponse;
 
 const DB_KEY_PREFIXES = ["aju_live_", "aju_test_"];
 const DB_PREFIX_LEN = 12;
+
+const DEFAULT_DB_SCOPES: ApiKeyScope[] = ["read", "write"];
+
+/**
+ * Narrow the JSON-stored `scopes` column to a typed ApiKeyScope[]. Unknown
+ * or malformed entries are dropped; if nothing valid remains we fall back to
+ * `DEFAULT_DB_SCOPES` so a single bad row doesn't lock the user out.
+ */
+function normalizeScopes(raw: unknown): ApiKeyScope[] {
+  if (!Array.isArray(raw)) return [...DEFAULT_DB_SCOPES];
+  const valid = new Set<ApiKeyScope>();
+  for (const entry of raw) {
+    if (typeof entry !== "string") continue;
+    if ((ALL_API_KEY_SCOPES as readonly string[]).includes(entry)) {
+      valid.add(entry as ApiKeyScope);
+    }
+  }
+  return valid.size > 0 ? [...valid] : [...DEFAULT_DB_SCOPES];
+}
 
 function buildKeyMap(): Map<string, string> {
   const map = new Map<string, string>();
@@ -149,6 +177,7 @@ async function authenticateDbKey(token: string): Promise<AuthSuccess | null> {
     apiKeyId: row.id,
     organizationId,
     agentId,
+    scopes: normalizeScopes(row.scopes),
   };
 }
 
@@ -166,7 +195,13 @@ export async function authenticate(req: NextRequest): Promise<AuthResult> {
 
   const identity = lookupEnvKey(token);
   if (identity) {
-    return { identity, role: identity === "admin" ? "admin" : "member" };
+    return {
+      identity,
+      role: identity === "admin" ? "admin" : "member",
+      // Legacy single-tenant ops keys aren't credential-capped — the operator
+      // already owns the deployment, so scope gating would be theatre here.
+      scopes: [...ALL_API_KEY_SCOPES],
+    };
   }
   return unauthorized();
 }

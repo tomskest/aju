@@ -23,8 +23,23 @@ export const slugSchema = z
 // Org role — kept in sync with `ORG_ROLES` in lib/tenant/types.ts.
 export const orgRoleSchema = z.enum(["owner", "admin", "member"]);
 
-// API key scopes.
-export const apiKeyScopeSchema = z.enum(["read", "write", "admin"]);
+// API key scopes — credential-level capability cap. Effective permission for
+// any action is the intersection of these scopes and the principal's
+// BrainAccess.role. See lib/route-helpers.ts `requiresScope` for enforcement.
+//
+//   read   — vault reads (search, browse, document fetch, history, files read)
+//   write  — non-destructive vault writes (create, update, files upload, reindex)
+//   delete — destructive writes (document delete, file delete, version revert)
+//   admin  — control-plane (mint/revoke keys, manage agents, manage memberships)
+export const apiKeyScopeSchema = z.enum(["read", "write", "delete", "admin"]);
+export type ApiKeyScope = z.infer<typeof apiKeyScopeSchema>;
+
+export const ALL_API_KEY_SCOPES: readonly ApiKeyScope[] = [
+  "read",
+  "write",
+  "delete",
+  "admin",
+];
 
 // Human-readable name (org, brain, agent, key, etc.). Trimmed; bounded.
 export const nameSchema = z.string().trim().min(1).max(120);

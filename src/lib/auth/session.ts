@@ -4,6 +4,10 @@ import type { NextRequest } from "next/server";
 import type { User } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { authenticate, isAuthError } from "./bearer";
+import {
+  ALL_API_KEY_SCOPES,
+  type ApiKeyScope,
+} from "@/lib/validators/primitives";
 
 const SESSION_COOKIE = "aju_session";
 const ACTIVE_ORG_COOKIE = "aju_active_org";
@@ -233,13 +237,20 @@ export async function currentAuth(req?: NextRequest): Promise<{
   organizationId: string | null;
   agentId?: string;
   apiKeyId?: string;
+  scopes: ApiKeyScope[];
 } | null> {
   // Session cookie takes precedence so a user signed into the dashboard
   // doesn't accidentally act as their saved CLI key if both are present.
   const cookieUser = await currentUser();
   if (cookieUser) {
     const organizationId = await getActiveOrganizationId();
-    return { user: cookieUser, organizationId };
+    // Cookie sessions aren't credential-capped — the user is interactively
+    // authenticated; scope downscoping is an API-key concept.
+    return {
+      user: cookieUser,
+      organizationId,
+      scopes: [...ALL_API_KEY_SCOPES],
+    };
   }
 
   if (!req) return null;
@@ -261,5 +272,6 @@ export async function currentAuth(req?: NextRequest): Promise<{
     organizationId,
     agentId: bearerAuth.agentId,
     apiKeyId: bearerAuth.apiKeyId,
+    scopes: bearerAuth.scopes,
   };
 }

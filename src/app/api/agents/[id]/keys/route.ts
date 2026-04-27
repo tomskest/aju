@@ -5,6 +5,7 @@ import { currentAuth, generateToken } from "@/lib/auth";
 import { enforceApiKeysLimit } from "@/lib/billing";
 import { generateApiKey } from "@/lib/auth";
 import { canManageMembers, type OrgRole } from "@/lib/tenant";
+import { requireScope } from "@/lib/route-helpers";
 
 export const runtime = "nodejs";
 
@@ -35,8 +36,8 @@ function notFound() {
   return NextResponse.json({ error: "not_found" }, { status: 404 });
 }
 
-type Scope = "read" | "write" | "admin";
-const ALLOWED_SCOPES: readonly Scope[] = ["read", "write", "admin"] as const;
+type Scope = "read" | "write" | "delete" | "admin";
+const ALLOWED_SCOPES: readonly Scope[] = ["read", "write", "delete", "admin"] as const;
 const DEFAULT_SCOPES: Scope[] = ["read", "write"];
 const MAX_NAME_LENGTH = 120;
 const MAX_EXPIRES_DAYS = 365 * 10;
@@ -191,6 +192,9 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
 
   const check = await assertAgentAdmin(agentId, user.id, organizationId);
   if (!check.ok) return check.response;
+
+  const scopeDenied = requireScope(auth, "admin");
+  if (scopeDenied) return scopeDenied;
 
   // Agent keys count against the minter's apiKeysMax cap (matches the
   // usage page, which sums both user-keys and agent-keys by userId).

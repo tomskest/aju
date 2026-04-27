@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { storageFor } from "@/lib/tenant";
 import { extractText, computeTextHash } from "@/lib/storage";
 import { updateFileEmbedding } from "@/lib/embeddings";
-import { resolveBrain, isBrainError } from "@/lib/vault";
+import { resolveBrain, isBrainError, canWrite } from "@/lib/vault";
 import { MAX_UPLOAD_BYTES } from "@/lib/config";
 import { validateS3PathSegment } from "@/lib/storage";
 import { authedTenantRoute } from "@/lib/route-helpers";
@@ -11,6 +11,13 @@ export const POST = authedTenantRoute(
   async ({ req, tenant, tx, organizationId, principal }) => {
     const brain = await resolveBrain(tx, req, principal);
     if (isBrainError(brain)) return brain;
+
+    if (!canWrite(brain)) {
+      return NextResponse.json(
+        { error: "Write access denied for this brain" },
+        { status: 403 },
+      );
+    }
 
     const body = await req.json();
     const { s3Key, filename, contentType, category, tags, source } = body as {
@@ -125,4 +132,5 @@ export const POST = authedTenantRoute(
 
     return NextResponse.json(file, { status: 201 });
   },
+  { requiresScope: "write" },
 );

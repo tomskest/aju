@@ -9,6 +9,7 @@ import {
 import { currentAuth } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { resolveTenantAccess, withBrainContext } from "@/lib/tenant";
+import { requireScope } from "@/lib/route-helpers";
 import type { AuthSuccess } from "@/lib/auth";
 import type { OrgRole } from "@/lib/tenant";
 
@@ -53,6 +54,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 
+  const scopeDenied = requireScope(auth, "write");
+  if (scopeDenied) return scopeDenied;
+
   let stage: "access" | "autoLinkBrain" | "rebuildLinks" = "access";
   try {
     const { tenant, brainIds } = await resolveTenantAccess(
@@ -68,6 +72,7 @@ export async function POST(req: NextRequest) {
       apiKeyId: auth.apiKeyId,
       organizationId: auth.organizationId,
       agentId: auth.agentId,
+      scopes: auth.scopes,
     };
 
     // Brief tx to verify brain access — released before bulk work runs.

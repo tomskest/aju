@@ -136,6 +136,7 @@ const handler = authedTenantRoute(
 
     return NextResponse.json(file, { status: 201 });
   },
+  { requiresScope: "write" },
 );
 
 export async function POST(

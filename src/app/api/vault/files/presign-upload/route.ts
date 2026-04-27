@@ -116,4 +116,5 @@ export const POST = authedTenantRoute(
       maxBytes: MAX_UPLOAD_BYTES,
     };
   },
+  { requiresScope: "write" },
 );

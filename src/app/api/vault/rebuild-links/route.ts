@@ -35,4 +35,5 @@ export const POST = authedTenantRoute(
       durationMs: Date.now() - start,
     };
   },
+  { requiresScope: "write" },
 );

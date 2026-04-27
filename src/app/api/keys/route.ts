@@ -20,8 +20,21 @@ const DEFAULT_SCOPES: Scope[] = ["read", "write"];
 const MAX_EXPIRES_DAYS = 365 * 10; // ten years — effectively no-expiry with a ceiling
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
+// Preset → scope-array mapping. UI sends `preset`; raw `scopes` arrays still
+// accepted for power users / programmatic clients. If both are sent, `scopes`
+// wins (explicit beats convenience).
+const presetSchema = z.enum(["reader", "editor", "operator", "owner"]);
+type Preset = z.infer<typeof presetSchema>;
+const SCOPE_PRESETS: Record<Preset, Scope[]> = {
+  reader: ["read"],
+  editor: ["read", "write"],
+  operator: ["read", "write", "delete"],
+  owner: ["read", "write", "delete", "admin"],
+};
+
 const createKeySchema = z.object({
   name: nameSchema,
+  preset: presetSchema.optional(),
   scopes: z
     .array(apiKeyScopeSchema)
     .optional()
@@ -165,11 +178,20 @@ export const POST = authedUserRoute(
 
     const validation = await validateBody(req, createKeySchema);
     if (!validation.ok) return validation.response;
-    const { name, scopes: requestedScopes, expiresInDays, organizationId: requestedOrgId } =
-      validation.value;
+    const {
+      name,
+      preset,
+      scopes: requestedScopes,
+      expiresInDays,
+      organizationId: requestedOrgId,
+    } = validation.value;
 
     const scopes =
-      requestedScopes && requestedScopes.length > 0 ? requestedScopes : DEFAULT_SCOPES;
+      requestedScopes && requestedScopes.length > 0
+        ? requestedScopes
+        : preset
+          ? SCOPE_PRESETS[preset]
+          : DEFAULT_SCOPES;
 
     const expiresAt = expiresInDays
       ? new Date(Date.now() + expiresInDays * MS_PER_DAY)
@@ -252,4 +274,5 @@ export const POST = authedUserRoute(
       { status: 201 },
     );
   },
+  { requiresScope: "admin" },
 );
