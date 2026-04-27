@@ -120,7 +120,19 @@ export default function OrgSwitcher() {
       }
       setOpen(false);
       setBusyId(null);
-      router.refresh();
+      // Brain pages are scoped to a specific org — the brain name in the
+      // current URL almost certainly doesn't exist in the new org, which
+      // produces a 404 on plain refresh. Navigate to the safe brains
+      // index for the new org instead. Org-neutral routes (keys, usage,
+      // agents) just need a refresh — they re-query against the new
+      // active org cookie.
+      const path =
+        typeof window !== "undefined" ? window.location.pathname : "";
+      if (path.startsWith("/app/brain/") || path === "/app/brain") {
+        router.push("/app/brains");
+      } else {
+        router.refresh();
+      }
       // Refresh the list so the active marker moves.
       loadOrgs();
     } catch {
