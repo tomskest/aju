@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -120,12 +121,51 @@ alias for this command and will be removed in a future release.`,
 		return fmt.Errorf("chmod temp binary: %w", err)
 	}
 
-	if err := os.Rename(tmpPath, exePath); err != nil {
-		return fmt.Errorf("install new binary: %w", err)
+	if err := installBinary(tmpPath, exePath); err != nil {
+		return err
 	}
 	renamed = true
 
 	fmt.Printf("Updated to %s.\n", m.LatestVersion)
+	return nil
+}
+
+// installBinary atomically replaces exePath with the file at tmpPath.
+//
+// On Unix, os.Rename over the running executable is fine — the kernel keeps
+// the open inode alive until the process exits.
+//
+// On Windows, the running .exe is locked: you can rename it out of the way,
+// but you cannot overwrite or delete it. So we move the running exe to a
+// sibling .old name, then rename the new binary into the original path. The
+// .old file lingers until the next self-update, which removes it before
+// starting (it can't be deleted while the previous process is still running).
+func installBinary(tmpPath, exePath string) error {
+	if runtime.GOOS != "windows" {
+		if err := os.Rename(tmpPath, exePath); err != nil {
+			return fmt.Errorf("install new binary: %w", err)
+		}
+		return nil
+	}
+
+	backup := exePath + ".old"
+	// Clear any leftover backup from a prior update. This may fail if the
+	// previous aju process is somehow still running; treat as best-effort.
+	_ = os.Remove(backup)
+
+	if err := os.Rename(exePath, backup); err != nil {
+		return fmt.Errorf("move running binary aside: %w", err)
+	}
+	if err := os.Rename(tmpPath, exePath); err != nil {
+		// Roll back so the user is left with a working binary.
+		if rbErr := os.Rename(backup, exePath); rbErr != nil {
+			return fmt.Errorf("install new binary: %w (rollback also failed: %v)", err, rbErr)
+		}
+		return fmt.Errorf("install new binary: %w", err)
+	}
+	// Best-effort cleanup; on Windows the OS still holds the old image, so
+	// this will typically fail and the file will be removed on next update.
+	_ = os.Remove(backup)
 	return nil
 }
 
