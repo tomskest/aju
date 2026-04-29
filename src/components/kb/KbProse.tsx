@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
 
 /**
  * Renders KB markdown HTML with the project's `kb-prose` style and
@@ -346,7 +346,7 @@ function openMermaidFullscreen(sourceSvg: SVGElement) {
   requestAnimationFrame(fit);
 }
 
-export default function KbProse({ html, className }: Props) {
+function KbProseInner({ html, className }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -485,3 +485,14 @@ export default function KbProse({ html, className }: Props) {
     />
   );
 }
+
+// Memoized so parent re-renders (e.g. validation state change in
+// BrainExplorer) don't reset `dangerouslySetInnerHTML`, which would detach
+// the `<pre>` mid-flight while mermaid is still rendering and leave the
+// resulting <figure> orphaned. React 19 (19.2.5) re-applies innerHTML on
+// parent re-render even when the html string is identical.
+const KbProse = memo(KbProseInner, (prev, next) =>
+  prev.html === next.html && prev.className === next.className,
+);
+
+export default KbProse;
