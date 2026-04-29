@@ -350,18 +350,25 @@ export default function KbProse({ html, className }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    console.log("[kb-prose] effect fired, html bytes:", html?.length ?? 0);
     const root = containerRef.current;
-    if (!root) return;
+    if (!root) {
+      console.log("[kb-prose] bailout: no containerRef");
+      return;
+    }
 
     const codeBlocks = Array.from(
       root.querySelectorAll<HTMLElement>("code.language-mermaid"),
     );
+    console.log("[kb-prose] codeBlocks found:", codeBlocks.length);
     if (codeBlocks.length === 0) return;
 
     let cancelled = false;
 
     (async () => {
+      console.log("[kb-prose] loading mermaid…");
       const mermaid = await loadMermaid();
+      console.log("[kb-prose] mermaid loaded, cancelled?", cancelled);
       if (cancelled) return;
 
       for (let i = 0; i < codeBlocks.length; i++) {
