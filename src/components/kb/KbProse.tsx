@@ -365,6 +365,20 @@ export default function KbProse({ html, className }: Props) {
 
     let cancelled = false;
 
+    const obs = new MutationObserver((muts) => {
+      for (const m of muts) {
+        if (m.type === "childList" && (m.addedNodes.length || m.removedNodes.length)) {
+          console.log("[kb-prose] DOM mutation in kb-prose:", {
+            target: (m.target as Element).tagName,
+            added: m.addedNodes.length,
+            removed: m.removedNodes.length,
+            removedTags: Array.from(m.removedNodes).map((n) => (n as Element).tagName).join(","),
+          });
+        }
+      }
+    });
+    obs.observe(root, { childList: true, subtree: true });
+
     (async () => {
       console.log("[kb-prose] loading mermaid…");
       const mermaid = await loadMermaid();
@@ -459,6 +473,7 @@ export default function KbProse({ html, className }: Props) {
 
     return () => {
       cancelled = true;
+      obs.disconnect();
     };
   }, [html]);
 
