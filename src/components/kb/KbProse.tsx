@@ -374,17 +374,21 @@ export default function KbProse({ html, className }: Props) {
       for (let i = 0; i < codeBlocks.length; i++) {
         const codeEl = codeBlocks[i];
         const pre = codeEl.parentElement;
+        console.log("[kb-prose] iter", i, "parentTag:", pre?.tagName, "enhanced:", pre?.dataset.mermaidEnhanced);
         if (!pre || pre.tagName !== "PRE") continue;
         if (pre.dataset.mermaidEnhanced === "1") continue;
 
         const source = codeEl.textContent ?? "";
         const id = `mermaid-${Date.now()}-${i}`;
+        console.log("[kb-prose] calling mermaid.render", { id, sourceBytes: source.length, hasNewlines: source.includes("\n") });
 
         let svg: string;
         try {
           const result = await mermaid.render(id, source);
           svg = result.svg;
+          console.log("[kb-prose] render OK, svg bytes:", svg.length);
         } catch (err) {
+          console.error("[kb-prose] render threw:", err);
           pre.dataset.mermaidEnhanced = "error";
           const note = document.createElement("div");
           note.className = "mermaid-error";
@@ -445,7 +449,9 @@ export default function KbProse({ html, className }: Props) {
           if (svgEl) openMermaidFullscreen(svgEl);
         });
 
+        console.log("[kb-prose] replacing pre with figure, pre still in DOM?", document.contains(pre));
         pre.replaceWith(figure);
+        console.log("[kb-prose] replace done, figure in DOM?", document.contains(figure));
       }
     })().catch((err) => {
       console.error("[kb-prose] mermaid enhancement failed:", err);
