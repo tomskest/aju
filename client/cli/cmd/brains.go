@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 
@@ -423,6 +424,119 @@ Owner-only.`,
 		fmt.Printf("%s\t%s\t%s\n", m.Email, m.Role, m.Name)
 	}
 	return nil
+}
+
+// brainSettingsResp mirrors the GET/PATCH /api/brains/[id]/settings payload.
+type brainSettingsResp struct {
+	Brain struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+		Type string `json:"type"`
+	} `json:"brain"`
+	Role     string `json:"role,omitempty"`
+	Settings struct {
+		ValidationHalfLifeDays int     `json:"validationHalfLifeDays"`
+		RankWeightValidated    float64 `json:"rankWeightValidated"`
+		RankWeightStale        float64 `json:"rankWeightStale"`
+		RankWeightHuman        float64 `json:"rankWeightHuman"`
+		UpdatedAt              string  `json:"updatedAt"`
+	} `json:"settings"`
+}
+
+// BrainsConfig is `aju brains config <name> [--validation-half-life N] ...`.
+//
+// With no settings flags: prints current settings.
+// With one or more flags: PATCHes those fields and prints the new settings.
+//
+// Resolves the brain id by fetching the access list and matching on name —
+// keeps the surface symmetric with `brains delete` which does the same.
+func BrainsConfig(args []string) error {
+	fs := flag.NewFlagSet("brains config", flag.ContinueOnError)
+	halfLife := fs.Int("validation-half-life", -1, "days after which a `validated` doc gets the staleByTime flag")
+	weightValidated := fs.Float64("weight-validated", math.NaN(), "ranking boost for validated docs (e.g. 0.1)")
+	weightStale := fs.Float64("weight-stale", math.NaN(), "ranking penalty for stale docs (e.g. -0.05)")
+	weightHuman := fs.Float64("weight-human", math.NaN(), "ranking boost for provenance=human")
+	jsonOut := fs.Bool("json", false, "print raw JSON")
+	setLeafUsage(fs, leafHelp{
+		Summary: "Read or update per-brain validation settings.",
+		Usage:   "aju brains config <name> [--validation-half-life N] [--weight-validated F] [--weight-stale F] [--weight-human F] [--json]",
+		Long:    "Without flags, prints the brain's current settings. With flags, PATCHes them. Owner-only writes.",
+		Examples: []string{
+			"aju brains config Acme",
+			"aju brains config Acme --validation-half-life 90",
+			"aju brains config Acme --weight-validated 0.08 --weight-stale -0.02",
+		},
+	})
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	if fs.NArg() < 1 {
+		return errors.New("usage: aju brains config <name> [flags]")
+	}
+	name := fs.Arg(0)
+
+	client, _, err := loadAuthedClient()
+	if err != nil {
+		return err
+	}
+
+	id, err := resolveBrainIDByName(client, name)
+	if err != nil {
+		return err
+	}
+
+	patch := map[string]any{}
+	if *halfLife >= 0 {
+		patch["validationHalfLifeDays"] = *halfLife
+	}
+	if !math.IsNaN(*weightValidated) {
+		patch["rankWeightValidated"] = *weightValidated
+	}
+	if !math.IsNaN(*weightStale) {
+		patch["rankWeightStale"] = *weightStale
+	}
+	if !math.IsNaN(*weightHuman) {
+		patch["rankWeightHuman"] = *weightHuman
+	}
+
+	var resp brainSettingsResp
+	if len(patch) == 0 {
+		if err := client.Get("/api/brains/"+id+"/settings", &resp); err != nil {
+			return printFriendlyErr(err)
+		}
+	} else {
+		if err := client.Do("PATCH", "/api/brains/"+id+"/settings", patch, &resp); err != nil {
+			return printFriendlyErr(err)
+		}
+	}
+
+	if *jsonOut {
+		return printJSON(&resp)
+	}
+	fmt.Printf("brain:                  %s\n", name)
+	fmt.Printf("validationHalfLifeDays: %d\n", resp.Settings.ValidationHalfLifeDays)
+	fmt.Printf("rankWeightValidated:    %.4f\n", resp.Settings.RankWeightValidated)
+	fmt.Printf("rankWeightStale:        %.4f\n", resp.Settings.RankWeightStale)
+	fmt.Printf("rankWeightHuman:        %.4f\n", resp.Settings.RankWeightHuman)
+	if resp.Settings.UpdatedAt != "" {
+		fmt.Printf("updatedAt:              %s\n", resp.Settings.UpdatedAt)
+	}
+	return nil
+}
+
+// resolveBrainIDByName fetches the brain list and finds the id for the
+// named brain. Returns a friendly error when no brain matches.
+func resolveBrainIDByName(client *httpx.Client, name string) (string, error) {
+	var resp brainsListResp
+	if err := client.Get("/api/brains", &resp); err != nil {
+		return "", printFriendlyErr(err)
+	}
+	for _, b := range resp.Brains {
+		if b.Name == name {
+			return b.ID, nil
+		}
+	}
+	return "", fmt.Errorf("brain not found: %s", name)
 }
 
 // confirmDeletion asks the user to type the brain name before proceeding.

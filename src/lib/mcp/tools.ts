@@ -15,6 +15,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerFilesTools } from "./tools/files";
 import { registerSearchTools } from "./tools/search";
 import { registerVaultTools } from "./tools/vault";
+import { registerValidationTools } from "./tools/validation";
 import type { McpToolContext } from "./tools/shared";
 
 export type { McpToolContext };
@@ -28,7 +29,8 @@ export function registerAjuTools(server: McpServer, ctx: McpToolContext): void {
   registerSearchTools(server, ctx);
   registerVaultTools(server, ctx);
   registerFilesTools(server, ctx);
+  registerValidationTools(server, ctx);
 }
 
 /** Tool count — exported for diagnostics / logs. */
-export const AJU_TOOL_COUNT = 10;
+export const AJU_TOOL_COUNT = 15;

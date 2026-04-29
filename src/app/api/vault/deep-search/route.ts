@@ -2,6 +2,13 @@ import { NextResponse } from "next/server";
 import { Prisma } from "@prisma/client-tenant";
 import { generateEmbedding, toVectorLiteral } from "@/lib/embeddings";
 import { resolveBrainIds, isBrainError } from "@/lib/vault";
+import {
+  buildValidationSqlFilter,
+  makeValidationBlock,
+  DEFAULT_RANK_WEIGHTS,
+  type ValidationBlock,
+  type ValidationFilterOpts,
+} from "@/lib/vault/validation-filter";
 import { authedTenantRoute } from "@/lib/route-helpers";
 
 /**
@@ -54,6 +61,10 @@ export const GET = authedTenantRoute(async ({ req, tx, principal }) => {
     2,
   );
 
+  const validationOpts: ValidationFilterOpts = parseValidationFlags(url);
+  const validationFilter = buildValidationSqlFilter(validationOpts);
+  const w = DEFAULT_RANK_WEIGHTS;
+
   // Step 1: Generate query embedding. Voyage is asymmetric: queries must
   // use input_type="query" while indexed chunks use "document".
   const queryEmbedding = await generateEmbedding(q, "query");
@@ -66,7 +77,7 @@ export const GET = authedTenantRoute(async ({ req, tx, principal }) => {
   ];
   if (section) filters.push(Prisma.sql`section = ${section}`);
   if (docType) filters.push(Prisma.sql`doc_type = ${docType}`);
-  const filterClause = Prisma.sql`AND ${Prisma.join(filters, " AND ")}`;
+  const filterClause = Prisma.sql`AND ${Prisma.join(filters, " AND ")}${validationFilter}`;
 
   const seedResults = await tx.$queryRaw<
     Array<{
@@ -81,6 +92,10 @@ export const GET = authedTenantRoute(async ({ req, tx, principal }) => {
       similarity: number | null;
       fts_rank: number | null;
       rrf_score: number;
+      validation_status: string;
+      provenance: string;
+      validated_at: Date | null;
+      validated_by: string | null;
     }>
   >`
     WITH vector_results AS (
@@ -109,7 +124,8 @@ export const GET = authedTenantRoute(async ({ req, tx, principal }) => {
     )
     SELECT d.id, d.path, d.title, d.section, d.doc_type, d.doc_status,
            d.tags, d.word_count,
-           c.similarity, c.fts_rank, c.rrf_score
+           c.similarity, c.fts_rank, c.rrf_score,
+           d.validation_status, d.provenance, d.validated_at, d.validated_by
     FROM combined c
     JOIN vault_documents d ON d.id = c.id
     ORDER BY c.rrf_score DESC
@@ -188,7 +204,9 @@ export const GET = authedTenantRoute(async ({ req, tx, principal }) => {
 
   const neighborIds = Array.from(neighborMap.keys());
 
-  // Step 4: Score neighbors by vector similarity to the query
+  // Step 4: Score neighbors by vector similarity to the query.
+  // Validation filter applies here too — neighbors that have been
+  // disqualified shouldn't surface even via graph expansion.
   let neighborDocs: Array<{
     id: string;
     path: string;
@@ -199,6 +217,10 @@ export const GET = authedTenantRoute(async ({ req, tx, principal }) => {
     tags: string[];
     word_count: number;
     similarity: number;
+    validation_status: string;
+    provenance: string;
+    validated_at: Date | null;
+    validated_by: string | null;
   }> = [];
 
   if (neighborIds.length > 0) {
@@ -208,9 +230,10 @@ export const GET = authedTenantRoute(async ({ req, tx, principal }) => {
       SELECT id, path, title, section, doc_type, doc_status, tags, word_count,
              CASE WHEN embedding IS NOT NULL
                   THEN 1 - (embedding <=> ${vectorLiteral}::vector)
-                  ELSE 0 END AS similarity
+                  ELSE 0 END AS similarity,
+             validation_status, provenance, validated_at, validated_by
       FROM vault_documents
-      WHERE id = ANY(${neighborIds}::text[])
+      WHERE id = ANY(${neighborIds}::text[])${validationFilter}
       ORDER BY CASE WHEN embedding IS NOT NULL
                     THEN embedding <=> ${vectorLiteral}::vector
                     ELSE 999 END
@@ -239,12 +262,28 @@ export const GET = authedTenantRoute(async ({ req, tx, principal }) => {
     rrfScore: number | null;
     hop: number;
     linkedFrom: string[];
+    validation: ValidationBlock;
+  };
+
+  // Validation boost added to the final blended score. Magnitudes are the
+  // same as the search routes (0.10 / -0.05 / 0.05) — already comparable to
+  // the 0–1 range deep-search scores live in.
+  const boostFor = (
+    status: string,
+    provenance: string,
+  ): number => {
+    let boost = 0;
+    if (status === "validated") boost += w.validated;
+    else if (status === "stale") boost += w.stale;
+    if (provenance === "human") boost += w.human;
+    return boost;
   };
 
   const results: ResultEntry[] = [];
   const seedIdToPath = new Map(seedResults.map((r) => [r.id, r.path]));
 
   for (const r of seedResults) {
+    const baseScore = Number(r.rrf_score) / maxRrf; // normalize to 0-1
     results.push({
       id: r.id,
       path: r.path,
@@ -254,12 +293,13 @@ export const GET = authedTenantRoute(async ({ req, tx, principal }) => {
       docStatus: r.doc_status,
       tags: r.tags,
       wordCount: r.word_count,
-      score: Number(r.rrf_score) / maxRrf, // normalize to 0-1
+      score: baseScore + boostFor(r.validation_status, r.provenance),
       source: "seed",
       similarity: r.similarity != null ? Number(r.similarity) : null,
       rrfScore: Number(r.rrf_score),
       hop: 0,
       linkedFrom: [],
+      validation: makeValidationBlock(r),
     });
   }
 
@@ -272,7 +312,8 @@ export const GET = authedTenantRoute(async ({ req, tx, principal }) => {
     const graphProximity = meta.minHop === 1 ? 0.8 : 0.5;
     const connectionDensity = Math.min(meta.seedIds.length / seeds, 1);
     // Blend: 50% similarity + 30% graph proximity + 20% connection density
-    const score = sim * 0.5 + graphProximity * 0.3 + connectionDensity * 0.2;
+    const baseScore =
+      sim * 0.5 + graphProximity * 0.3 + connectionDensity * 0.2;
 
     results.push({
       id: r.id,
@@ -283,7 +324,7 @@ export const GET = authedTenantRoute(async ({ req, tx, principal }) => {
       docStatus: r.doc_status,
       tags: r.tags,
       wordCount: r.word_count,
-      score,
+      score: baseScore + boostFor(r.validation_status, r.provenance),
       source: "graph",
       similarity: sim,
       rrfScore: null,
@@ -291,6 +332,7 @@ export const GET = authedTenantRoute(async ({ req, tx, principal }) => {
       linkedFrom: meta.seedIds
         .map((id) => seedIdToPath.get(id))
         .filter(Boolean) as string[],
+      validation: makeValidationBlock(r),
     });
   }
 
@@ -332,6 +374,7 @@ export const GET = authedTenantRoute(async ({ req, tx, principal }) => {
         r.similarity != null ? Math.round(r.similarity * 1000) / 1000 : null,
       hop: r.hop,
       linkedFrom: r.linkedFrom,
+      validation: r.validation,
     })),
     graph: {
       nodes: includedPaths.size,
@@ -339,3 +382,20 @@ export const GET = authedTenantRoute(async ({ req, tx, principal }) => {
     },
   };
 });
+
+function parseValidationFlags(url: URL): ValidationFilterOpts {
+  const facts = url.searchParams.get("facts");
+  const includeStale = url.searchParams.get("includeStale");
+  const includeDisq = url.searchParams.get("includeDisqualified");
+  const provenance = url.searchParams.get("provenance");
+
+  const opts: ValidationFilterOpts = {};
+  if (facts === "1" || facts === "true") opts.factsOnly = true;
+  if (includeStale === "0" || includeStale === "false")
+    opts.includeStale = false;
+  if (includeDisq === "1" || includeDisq === "true")
+    opts.includeDisqualified = true;
+  if (provenance === "human" || provenance === "agent" || provenance === "ingested")
+    opts.provenance = provenance;
+  return opts;
+}

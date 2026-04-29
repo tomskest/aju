@@ -83,7 +83,7 @@ func main() {
 		exitWith(dispatchMCP(rest))
 	case "search":
 		exitWith(cmd.Search(rest))
-	case "semantic":
+	case "semantic", "semantic-search":
 		exitWith(cmd.Semantic(rest))
 	case "deep-search":
 		exitWith(cmd.DeepSearch(rest))
@@ -125,6 +125,16 @@ func main() {
 		exitWith(cmd.Changes(rest))
 	case "history":
 		exitWith(cmd.History(rest))
+	case "validate":
+		exitWith(cmd.Validate(rest))
+	case "mark-stale":
+		exitWith(cmd.MarkStale(rest))
+	case "disqualify":
+		exitWith(cmd.Disqualify(rest))
+	case "clear-validation":
+		exitWith(cmd.ClearValidation(rest))
+	case "validation":
+		exitWith(cmd.DispatchValidation(rest))
 	case "news":
 		exitWith(cmd.News(rest))
 	case "doctor":
@@ -181,6 +191,8 @@ func dispatchBrains(args []string) error {
 		return cmd.BrainsUnshare(args[1:])
 	case "members":
 		return cmd.BrainsMembers(args[1:])
+	case "config":
+		return cmd.BrainsConfig(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown brains subcommand: %s\n\n", args[0])
 		cmd.HelpBrains()

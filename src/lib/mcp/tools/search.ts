@@ -9,6 +9,12 @@ import { z } from "zod";
 import { generateEmbedding, toVectorLiteral } from "@/lib/embeddings";
 import { withTenant } from "@/lib/tenant";
 import {
+  buildValidationSqlFilter,
+  makeValidationBlock,
+  DEFAULT_RANK_WEIGHTS,
+  type ValidationFilterOpts,
+} from "@/lib/vault/validation-filter";
+import {
   type McpToolContext,
   errorResult,
   requireOrgId,
@@ -17,6 +23,50 @@ import {
   textResult,
 } from "./shared";
 
+// Shared zod helpers for validation flags so every search tool exposes the
+// same surface to the LLM. Defaults match the REST routes: exclude
+// disqualified, keep stale.
+const VALIDATION_FLAG_SCHEMA = {
+  factsOnly: z
+    .boolean()
+    .optional()
+    .describe(
+      "Strict mode: return only validated documents. Use when you need to ground output in human-confirmed facts.",
+    ),
+  includeStale: z
+    .boolean()
+    .optional()
+    .describe(
+      "Include stale results. Default true — stale rides along in default mode.",
+    ),
+  includeDisqualified: z
+    .boolean()
+    .optional()
+    .describe(
+      "Include documents the user has explicitly flagged as wrong. Default false. Useful for debugging or auditing why a memory was disqualified.",
+    ),
+  provenance: z
+    .enum(["human", "agent", "ingested"])
+    .optional()
+    .describe(
+      "Restrict to a single provenance: 'human' (user-typed), 'agent' (AI-written), 'ingested' (imported). Use 'human' to filter out agent-authored noise.",
+    ),
+};
+
+function flagsToOpts(args: {
+  factsOnly?: boolean;
+  includeStale?: boolean;
+  includeDisqualified?: boolean;
+  provenance?: "human" | "agent" | "ingested";
+}): ValidationFilterOpts {
+  const opts: ValidationFilterOpts = {};
+  if (args.factsOnly) opts.factsOnly = true;
+  if (args.includeStale === false) opts.includeStale = false;
+  if (args.includeDisqualified === true) opts.includeDisqualified = true;
+  if (args.provenance) opts.provenance = args.provenance;
+  return opts;
+}
+
 export function registerSearchTools(
   server: McpServer,
   ctx: McpToolContext,
@@ -24,7 +74,7 @@ export function registerSearchTools(
   // ── aju_search ──────────────────────────────────────
   server.tool(
     "aju_search",
-    "Full-text search across one or more aju brains (memory, notes, vault, knowledge base, archive, journal). Use this to find documents by keywords. Returns ranked results with snippets. Pass a single brain name, an array, or 'all' to span every accessible brain.",
+    "Full-text search across one or more aju brains (memory, notes, vault, knowledge base, archive, journal). Use this to find documents by keywords. Every result includes a `validation` block — { status, provenance, validatedAt, validatedBy, staleByTime } — so you know which results are validated facts vs. unreviewed drafts. Default mode excludes disqualified docs and ranks validated higher. Pass a single brain name, an array, or 'all' to span every accessible brain.",
     {
       query: z.string().describe("Search query (supports natural language and boolean terms)"),
       brain: z
@@ -41,8 +91,9 @@ export function registerSearchTools(
         .number()
         .optional()
         .describe("Max results (default 20, max 100)."),
+      ...VALIDATION_FLAG_SCHEMA,
     },
-    async ({ query, brain, section, limit }) => {
+    async ({ query, brain, section, limit, factsOnly, includeStale, includeDisqualified, provenance }) => {
       try {
         const organizationId = requireOrgId(ctx);
         return await withTenant(
@@ -52,6 +103,11 @@ export function registerSearchTools(
             const brainIds = brains.map((b) => b.brainId);
             const nameById = new Map(brains.map((b) => [b.brainId, b.brainName]));
             const max = Math.min(limit ?? 20, 100);
+
+            const validationFilter = buildValidationSqlFilter(
+              flagsToOpts({ factsOnly, includeStale, includeDisqualified, provenance }),
+            );
+            const w = DEFAULT_RANK_WEIGHTS;
 
             const filters: Prisma.Sql[] = [
               Prisma.sql`search_vector @@ websearch_to_tsquery('english', ${query})`,
@@ -68,15 +124,27 @@ export function registerSearchTools(
                 brain_id: string;
                 rank: number;
                 snippet: string;
+                validation_status: string;
+                provenance: string;
+                validated_at: Date | null;
+                validated_by: string | null;
               }>
             >`
               SELECT path, title, section, brain_id,
-                     ts_rank(search_vector, websearch_to_tsquery('english', ${query})) AS rank,
+                     ts_rank(search_vector, websearch_to_tsquery('english', ${query})) + (
+                       CASE
+                         WHEN validation_status = 'validated' THEN ${w.validated}
+                         WHEN validation_status = 'stale' THEN ${w.stale}
+                         ELSE 0
+                       END
+                       + CASE WHEN provenance = 'human' THEN ${w.human} ELSE 0 END
+                     ) AS rank,
                      ts_headline('english', content, websearch_to_tsquery('english', ${query}),
                        'StartSel=<<, StopSel=>>, MaxWords=50, MinWords=15, MaxFragments=2'
-                     ) AS snippet
+                     ) AS snippet,
+                     validation_status, provenance, validated_at, validated_by
               FROM vault_documents
-              WHERE ${where}
+              WHERE ${where}${validationFilter}
               ORDER BY rank DESC
               LIMIT ${max}
             `;
@@ -92,6 +160,7 @@ export function registerSearchTools(
                 section: r.section,
                 score: Number(r.rank),
                 snippet: r.snippet,
+                validation: makeValidationBlock(r),
               })),
             });
           },
@@ -105,7 +174,7 @@ export function registerSearchTools(
   // ── aju_semantic_search ─────────────────────────────
   server.tool(
     "aju_semantic_search",
-    "Semantic search across one or more aju brains using AI embeddings. Finds conceptually related memories / notes even when exact keywords don't match. Use when the user asks you to recall something 'about' a topic or 'like' another thing. Pass a single brain name, an array, or 'all' to span every accessible brain — hybrid mode fuses candidates across brains in one RRF pass so scores are comparable.",
+    "Semantic search across one or more aju brains using AI embeddings. Finds conceptually related memories / notes even when exact keywords don't match. Use when the user asks you to recall something 'about' a topic or 'like' another thing. Every result includes a `validation` block — { status, provenance, validatedAt, validatedBy, staleByTime } — so you can distinguish validated facts from unreviewed drafts. Default mode excludes disqualified docs and ranks validated higher. Pass a single brain name, an array, or 'all' — hybrid mode fuses candidates across brains in one RRF pass so scores are comparable.",
     {
       query: z.string().describe("Natural-language query."),
       brain: z
@@ -119,8 +188,9 @@ export function registerSearchTools(
         .optional()
         .describe("Ranking mode: 'hybrid' (default, FTS + vector RRF) or 'vector' (pure semantic)."),
       limit: z.number().optional().describe("Max results (default 20, max 100)."),
+      ...VALIDATION_FLAG_SCHEMA,
     },
-    async ({ query, brain, mode, limit }) => {
+    async ({ query, brain, mode, limit, factsOnly, includeStale, includeDisqualified, provenance }) => {
       try {
         const organizationId = requireOrgId(ctx);
         return await withTenant(
@@ -132,10 +202,17 @@ export function registerSearchTools(
             const max = Math.min(limit ?? 20, 100);
             const m = mode ?? "hybrid";
 
+            const validationFilter = buildValidationSqlFilter(
+              flagsToOpts({ factsOnly, includeStale, includeDisqualified, provenance }),
+            );
+            const w = DEFAULT_RANK_WEIGHTS;
+
             const queryEmbedding = await generateEmbedding(query, "query");
             const vector = toVectorLiteral(queryEmbedding);
 
             if (m === "vector") {
+              // HNSW preservation: inner SELECT keeps the index-served order;
+              // outer applies boost + re-sorts the candidate window.
               const results = await tx.$queryRaw<
                 Array<{
                   path: string;
@@ -143,13 +220,32 @@ export function registerSearchTools(
                   section: string;
                   brain_id: string;
                   similarity: number;
+                  final_score: number;
+                  validation_status: string;
+                  provenance: string;
+                  validated_at: Date | null;
+                  validated_by: string | null;
                 }>
               >`
-                SELECT path, title, section, brain_id,
-                       1 - (embedding <=> ${vector}::vector) AS similarity
-                FROM vault_documents
-                WHERE embedding IS NOT NULL AND brain_id = ANY(${brainIds}::text[])
-                ORDER BY embedding <=> ${vector}::vector
+                SELECT * FROM (
+                  SELECT path, title, section, brain_id,
+                         1 - (embedding <=> ${vector}::vector) AS similarity,
+                         (1 - (embedding <=> ${vector}::vector)) + (
+                           CASE
+                             WHEN validation_status = 'validated' THEN ${w.validated}
+                             WHEN validation_status = 'stale' THEN ${w.stale}
+                             ELSE 0
+                           END
+                           + CASE WHEN provenance = 'human' THEN ${w.human} ELSE 0 END
+                         ) AS final_score,
+                         validation_status, provenance, validated_at, validated_by
+                  FROM vault_documents
+                  WHERE embedding IS NOT NULL
+                    AND brain_id = ANY(${brainIds}::text[])${validationFilter}
+                  ORDER BY embedding <=> ${vector}::vector
+                  LIMIT 100
+                ) candidates
+                ORDER BY final_score DESC
                 LIMIT ${max}
               `;
               return textResult({
@@ -163,13 +259,17 @@ export function registerSearchTools(
                   title: r.title,
                   section: r.section,
                   similarity: Number(r.similarity),
+                  score: Number(r.final_score),
+                  validation: makeValidationBlock(r),
                 })),
               });
             }
 
             // hybrid — RRF of FTS + vector, k = 60. The WHERE clauses below scope
             // every candidate to the requested brain set, so the fusion is
-            // natively cross-brain and produces one comparable ranking.
+            // natively cross-brain and produces one comparable ranking. Boost
+            // is applied post-normalization (rrf_score / max_rrf) so its
+            // magnitude is comparable to the boost weights.
             const k = 60;
             const results = await tx.$queryRaw<
               Array<{
@@ -180,13 +280,19 @@ export function registerSearchTools(
                 similarity: number | null;
                 fts_rank: number | null;
                 rrf_score: number;
+                final_score: number;
+                validation_status: string;
+                provenance: string;
+                validated_at: Date | null;
+                validated_by: string | null;
               }>
             >`
               WITH vector_results AS (
                 SELECT id, ROW_NUMBER() OVER (ORDER BY embedding <=> ${vector}::vector) AS vec_rank,
                        1 - (embedding <=> ${vector}::vector) AS similarity
                 FROM vault_documents
-                WHERE embedding IS NOT NULL AND brain_id = ANY(${brainIds}::text[])
+                WHERE embedding IS NOT NULL
+                  AND brain_id = ANY(${brainIds}::text[])${validationFilter}
                 ORDER BY embedding <=> ${vector}::vector
                 LIMIT 100
               ),
@@ -194,7 +300,8 @@ export function registerSearchTools(
                 SELECT id, ROW_NUMBER() OVER (ORDER BY ts_rank(search_vector, websearch_to_tsquery('english', ${query})) DESC) AS fts_rank,
                        ts_rank(search_vector, websearch_to_tsquery('english', ${query})) AS fts_score
                 FROM vault_documents
-                WHERE search_vector @@ websearch_to_tsquery('english', ${query}) AND brain_id = ANY(${brainIds}::text[])
+                WHERE search_vector @@ websearch_to_tsquery('english', ${query})
+                  AND brain_id = ANY(${brainIds}::text[])${validationFilter}
                 ORDER BY fts_score DESC
                 LIMIT 100
               ),
@@ -205,12 +312,25 @@ export function registerSearchTools(
                        f.fts_score AS fts_rank
                 FROM vector_results v
                 FULL OUTER JOIN fts_results f ON v.id = f.id
+              ),
+              max_rrf AS (
+                SELECT GREATEST(MAX(rrf_score), 1e-9) AS m FROM combined
               )
               SELECT d.path, d.title, d.section, d.brain_id,
-                     c.similarity, c.fts_rank, c.rrf_score
+                     c.similarity, c.fts_rank, c.rrf_score,
+                     (c.rrf_score / mr.m) + (
+                       CASE
+                         WHEN d.validation_status = 'validated' THEN ${w.validated}
+                         WHEN d.validation_status = 'stale' THEN ${w.stale}
+                         ELSE 0
+                       END
+                       + CASE WHEN d.provenance = 'human' THEN ${w.human} ELSE 0 END
+                     ) AS final_score,
+                     d.validation_status, d.provenance, d.validated_at, d.validated_by
               FROM combined c
               JOIN vault_documents d ON d.id = c.id
-              ORDER BY c.rrf_score DESC
+              CROSS JOIN max_rrf mr
+              ORDER BY final_score DESC
               LIMIT ${max}
             `;
             return textResult({
@@ -225,6 +345,8 @@ export function registerSearchTools(
                 section: r.section,
                 similarity: r.similarity != null ? Number(r.similarity) : null,
                 rrfScore: Number(r.rrf_score),
+                score: Number(r.final_score),
+                validation: makeValidationBlock(r),
               })),
             });
           },

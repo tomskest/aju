@@ -215,6 +215,23 @@ export function canWrite(ctx: BrainContext): boolean {
 }
 
 /**
+ * Validation gate. Personal brains: owner only — validation is the user's
+ * own truth claim, no shared editing of that signal. Org brains: any
+ * editor or owner — same rule as `canWrite`, since org brains are shared
+ * workspaces and validation is part of the shared workflow.
+ *
+ * Env-var / legacy callers reach here through `resolveBrain` with a
+ * synthesized `accessRole: "editor"`. They CAN'T validate personal brains
+ * via this helper (editor != owner on personal). For org brains they're
+ * treated like any editor — acceptable; the DB boundary already gates
+ * cross-org access.
+ */
+export function canValidate(ctx: BrainContext): boolean {
+  if (ctx.brainType === "personal") return ctx.accessRole === "owner";
+  return ctx.accessRole === "owner" || ctx.accessRole === "editor";
+}
+
+/**
  * Resolve a list of brains for a search-style request that may span one,
  * many, or all accessible brains. Shape of the brain param:
  *   - `?brain=all`               → every brain the caller can access

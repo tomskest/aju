@@ -1,6 +1,13 @@
 import { NextResponse } from "next/server";
 import { Prisma } from "@prisma/client-tenant";
 import { resolveBrainIds, isBrainError } from "@/lib/vault";
+import {
+  buildValidationSqlFilter,
+  buildValidationBoostExpr,
+  makeValidationBlock,
+  type ValidationBlock,
+  type ValidationFilterOpts,
+} from "@/lib/vault/validation-filter";
 import { authedTenantRoute } from "@/lib/route-helpers";
 
 export const GET = authedTenantRoute(async ({ req, tx, principal }) => {
@@ -32,6 +39,11 @@ export const GET = authedTenantRoute(async ({ req, tx, principal }) => {
     100,
   );
 
+  // Validation flags (see src/lib/vault/validation-filter.ts).
+  const validationOpts: ValidationFilterOpts = parseValidationFlags(url);
+  const validationFilter = buildValidationSqlFilter(validationOpts);
+  const boostExpr = buildValidationBoostExpr();
+
   const filters: Prisma.Sql[] = [
     Prisma.sql`search_vector @@ websearch_to_tsquery('english', ${q})`,
     Prisma.sql`brain_id = ANY(${brainIds}::text[])`,
@@ -46,6 +58,8 @@ export const GET = authedTenantRoute(async ({ req, tx, principal }) => {
   // Files leg drops out when the request filters on doc-only columns
   // (section / doc_type / doc_status) — those columns don't exist on
   // vault_files, so the UNION would either error or silently exclude.
+  // Files don't carry validation metadata; they're returned without
+  // boost/filter and with a null validation block on the client side.
   const filesUnion = hasDocFilters
     ? Prisma.empty
     : Prisma.sql`
@@ -57,7 +71,11 @@ export const GET = authedTenantRoute(async ({ req, tx, principal }) => {
                ts_rank(search_vector, websearch_to_tsquery('english', ${q})) AS rank,
                ts_headline('english', extracted_text, websearch_to_tsquery('english', ${q}),
                  'StartSel=<<, StopSel=>>, MaxWords=60, MinWords=20, MaxFragments=3'
-               ) AS snippet
+               ) AS snippet,
+               NULL AS validation_status,
+               NULL AS provenance,
+               NULL::timestamp AS validated_at,
+               NULL AS validated_by
         FROM vault_files
         WHERE search_vector @@ websearch_to_tsquery('english', ${q})
           AND extracted_text IS NOT NULL
@@ -78,17 +96,22 @@ export const GET = authedTenantRoute(async ({ req, tx, principal }) => {
       brain_id: string;
       rank: number;
       snippet: string;
+      validation_status: string | null;
+      provenance: string | null;
+      validated_at: Date | null;
+      validated_by: string | null;
     }>
   >`
     SELECT
       id, path, title, section, doc_type, doc_status, tags, word_count,
       'document' AS source_type, NULL AS mime_type, brain_id,
-      ts_rank(search_vector, websearch_to_tsquery('english', ${q})) AS rank,
+      ts_rank(search_vector, websearch_to_tsquery('english', ${q})) + ${boostExpr} AS rank,
       ts_headline('english', content, websearch_to_tsquery('english', ${q}),
         'StartSel=<<, StopSel=>>, MaxWords=60, MinWords=20, MaxFragments=3'
-      ) AS snippet
+      ) AS snippet,
+      validation_status, provenance, validated_at, validated_by
     FROM vault_documents
-    WHERE ${docWhere}
+    WHERE ${docWhere}${validationFilter}
     ${filesUnion}
     ORDER BY rank DESC
     LIMIT ${limit}
@@ -112,6 +135,31 @@ export const GET = authedTenantRoute(async ({ req, tx, principal }) => {
       brain: nameById.get(r.brain_id) ?? null,
       rank: r.rank,
       snippet: r.snippet,
+      validation: r.source_type === "document"
+        ? (makeValidationBlock(r) as ValidationBlock)
+        : null,
     })),
   };
 });
+
+/**
+ * Read validation flags from the URL into the shared ValidationFilterOpts
+ * shape. Default behavior matches the spec: exclude `disqualified`, keep
+ * `stale` in results.
+ */
+function parseValidationFlags(url: URL): ValidationFilterOpts {
+  const facts = url.searchParams.get("facts");
+  const includeStale = url.searchParams.get("includeStale");
+  const includeDisq = url.searchParams.get("includeDisqualified");
+  const provenance = url.searchParams.get("provenance");
+
+  const opts: ValidationFilterOpts = {};
+  if (facts === "1" || facts === "true") opts.factsOnly = true;
+  if (includeStale === "0" || includeStale === "false")
+    opts.includeStale = false;
+  if (includeDisq === "1" || includeDisq === "true")
+    opts.includeDisqualified = true;
+  if (provenance === "human" || provenance === "agent" || provenance === "ingested")
+    opts.provenance = provenance;
+  return opts;
+}

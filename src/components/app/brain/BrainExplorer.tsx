@@ -2,9 +2,12 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import KbProse from "@/components/kb/KbProse";
 import DocToc from "@/components/kb/DocToc";
+import ValidationPicker from "./ValidationPicker";
+import ValidationBar from "./ValidationBar";
+import type { ValidationState } from "./ValidationBadge";
 
 type DocSummary = {
   id: string;
@@ -18,6 +21,12 @@ type DocFull = DocSummary & {
   rendered: string;
   updatedAt: string;
   wordCount: number;
+  validation: {
+    status: string;
+    provenance: string;
+    validatedAt: string | null;
+    validatedBy: string | null;
+  };
 };
 
 type VersionMeta = {
@@ -38,6 +47,7 @@ type Props = {
   brainName: string;
   brainType: string;
   canWrite: boolean;
+  canValidate: boolean;
   docs: DocSummary[];
   currentDoc: DocFull | null;
   currentPath: string | null;
@@ -73,6 +83,7 @@ export default function BrainExplorer({
   brainName,
   brainType,
   canWrite,
+  canValidate,
   docs,
   currentDoc,
   currentPath,
@@ -102,6 +113,37 @@ export default function BrainExplorer({
     null,
   );
   const [versionDetailLoading, setVersionDetailLoading] = useState(false);
+
+  // Validation state. Server-rendered initial value comes through
+  // currentDoc.validation; ValidationPicker calls onChanged after a
+  // successful POST so the badge updates without a full router.refresh().
+  // We still refresh after a state change to keep the breakdown bar (which
+  // ships in Phase 4) in sync once it lands.
+  const [validation, setValidation] = useState<ValidationState | null>(
+    currentDoc?.validation
+      ? {
+          status: (currentDoc.validation.status as ValidationState["status"]) ?? "unvalidated",
+          provenance: currentDoc.validation.provenance,
+          validatedAt: currentDoc.validation.validatedAt,
+          validatedBy: currentDoc.validation.validatedBy,
+        }
+      : null,
+  );
+
+  // Re-sync validation state whenever the focused doc changes (sidebar
+  // navigation between docs without a full reload).
+  useEffect(() => {
+    setValidation(
+      currentDoc?.validation
+        ? {
+            status: (currentDoc.validation.status as ValidationState["status"]) ?? "unvalidated",
+            provenance: currentDoc.validation.provenance,
+            validatedAt: currentDoc.validation.validatedAt,
+            validatedBy: currentDoc.validation.validatedBy,
+          }
+        : null,
+    );
+  }, [currentDoc?.id, currentDoc?.validation]);
 
   const mainRef = useRef<HTMLElement | null>(null);
   const articleRef = useRef<HTMLElement | null>(null);
@@ -403,6 +445,12 @@ export default function BrainExplorer({
             className="mx-auto min-w-0 max-w-[960px] flex-1 py-10"
           >
             <header className="mb-8 border-b border-white/5 pb-6">
+              <div className="mb-3">
+                <ValidationBar
+                  brainName={brainName}
+                  refreshKey={`${currentDoc.id}:${validation?.status ?? "x"}`}
+                />
+              </div>
               <p className="font-mono text-[11px] text-[var(--color-faint)]">
                 {currentDoc.path}
               </p>
@@ -416,7 +464,7 @@ export default function BrainExplorer({
                 </p>
               </div>
               {canWrite && (
-                <div className="mt-5 flex gap-2">
+                <div className="mt-5 flex flex-wrap items-center gap-2">
                   {!editing ? (
                     <>
                       <button
@@ -447,6 +495,20 @@ export default function BrainExplorer({
                       >
                         delete
                       </button>
+                      <ValidationPicker
+                        brainName={brainName}
+                        docPath={currentDoc.path}
+                        state={validation}
+                        canEdit={canValidate}
+                        onChanged={(next) => {
+                          setValidation(next);
+                          // Refresh so search-result rankings, count
+                          // breakdowns, and the (Phase 4) bar pick up the
+                          // new state. The picker handles its own UI;
+                          // refresh is for everything else on the page.
+                          startTransition(() => router.refresh());
+                        }}
+                      />
                     </>
                   ) : (
                     <>

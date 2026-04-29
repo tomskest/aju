@@ -81,6 +81,36 @@ Add `--limit <n>` to cap results. `--brain` accepts a single name, a comma-separ
 
 **Cross-org caveat.** `--brain all` spans only the *active* org's brains. If the user belongs to multiple orgs (e.g., personal + a work team), switching orgs is a separate step: `aju orgs switch <slug>`.
 
+## Provenance & validation states
+
+Every search / semantic / deep-search result includes a `validation` block:
+
+- `status`: `validated` | `unvalidated` | `stale` | `disqualified`
+- `provenance`: `human` (typed by the user), `agent` (LLM-written), `ingested` (imported from a transcript / external doc)
+- `validatedAt`, `validatedBy`: when and by whom the doc was last vouched for
+- `staleByTime`: true when the validation is older than the brain's half-life (default 180 days)
+
+How to read these when grounding your answers:
+
+- `validated` → trust as fact. Cite directly without hedging.
+- `validated` + `staleByTime: true` → likely true; mention the age when the user is making a decision ("validated last May, may be worth re-confirming").
+- `unvalidated` + `provenance: human` → user wrote it but didn't review. Medium trust. Phrase as "according to a note from <date>" rather than as fact.
+- `unvalidated` + `provenance: agent` → AI-generated, not yet reviewed. Low trust. Cite as such ("an earlier agent run noted…").
+- `stale` → text changed after a previous validation. Treat as unvalidated; mention the staleness if you cite it.
+- `disqualified` → never appears in default search. Only surfaces with `--include-disqualified`. Do NOT cite as evidence — the user has flagged this as wrong.
+
+Default search already excludes `disqualified` and ranks `validated` higher. Use `--facts` for strict mode (only validated). Use `--provenance human` to filter out agent-authored noise.
+
+After the user confirms a fact you saved, validate it so future retrieval treats it as canonical:
+
+```bash
+aju validate <path>            # mark as validated
+aju mark-stale <path>          # flag content as out of date
+aju disqualify <path>          # exclude from future search (wrong/false)
+aju clear-validation <path>    # reset to unvalidated
+aju validation status <path>   # show current state + history
+```
+
 ## Reading a document
 
 ```bash
@@ -307,6 +337,11 @@ aju help <command>                        # per-command usage
 aju self-update                           # update the CLI binary to latest release
 aju news                                  # product announcements
 ```
+
+## Do
+
+- After the user confirms a fact you saved, run `aju validate <path>` so future retrieval treats it as canonical.
+- When a search result you're about to cite has `validation.status: stale` or `unvalidated + provenance: agent`, surface that uncertainty in your answer — don't quietly downgrade.
 
 ## Do NOT
 

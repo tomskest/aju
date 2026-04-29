@@ -24,6 +24,12 @@ type DocFull = DocSummary & {
   rendered: string;
   updatedAt: string;
   wordCount: number;
+  validation: {
+    status: string;
+    provenance: string;
+    validatedAt: string | null;
+    validatedBy: string | null;
+  };
 };
 
 export default async function BrainPage(props: PageProps) {
@@ -58,6 +64,12 @@ export default async function BrainPage(props: PageProps) {
   if (!access) notFound();
 
   const canWrite = access.role === "owner" || access.role === "editor";
+  // Validation gate. Mirror src/lib/vault/brain.ts canValidate(): personal
+  // brains are owner-only for validation, org brains follow canWrite.
+  const canValidate =
+    brain.type === "personal"
+      ? access.role === "owner"
+      : access.role === "owner" || access.role === "editor";
 
   // Build the sidebar list + (if a path is given) load the focused doc.
   // Done inside withBrainContext so RLS scopes the queries to this brain.
@@ -85,6 +97,10 @@ export default async function BrainPage(props: PageProps) {
             contentHash: true,
             wordCount: true,
             updatedAt: true,
+            provenance: true,
+            validationStatus: true,
+            validatedAt: true,
+            validatedBy: true,
           },
         });
         if (row) {
@@ -111,6 +127,12 @@ export default async function BrainPage(props: PageProps) {
             rendered: renderMarkdown(md),
             wordCount: row.wordCount,
             updatedAt: row.updatedAt.toISOString(),
+            validation: {
+              status: row.validationStatus,
+              provenance: row.provenance,
+              validatedAt: row.validatedAt?.toISOString() ?? null,
+              validatedBy: row.validatedBy,
+            },
           };
         }
       }
@@ -127,6 +149,7 @@ export default async function BrainPage(props: PageProps) {
       brainName={brain.name}
       brainType={brain.type}
       canWrite={canWrite}
+      canValidate={canValidate}
       docs={docs}
       currentDoc={currentDoc}
       currentPath={docPath}

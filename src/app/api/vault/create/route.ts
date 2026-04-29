@@ -20,6 +20,28 @@ const createDocSchema = z.object({
   source: vaultSourceSchema,
 });
 
+/**
+ * Map (principal, source) → provenance for the validation layer.
+ *
+ *   - Agent-authenticated callers always set `agent`, regardless of source.
+ *   - Sources that explicitly mean "imported from elsewhere" set `ingested`.
+ *   - Everything else defaults to `human`.
+ *
+ * The vaultSourceSchema is an open regex (^[a-z0-9_-]+$), so unknown source
+ * values are silently treated as `human`. Default-safe: a typo doesn't
+ * downgrade trust.
+ */
+const INGESTED_SOURCES = new Set(["import", "ingest", "backfill", "sync"]);
+
+function deriveProvenance(opts: {
+  agentId?: string;
+  source: string;
+}): "human" | "agent" | "ingested" {
+  if (opts.agentId) return "agent";
+  if (INGESTED_SOURCES.has(opts.source)) return "ingested";
+  return "human";
+}
+
 export const POST = authedTenantRoute(
   async ({ req, tenant, tx, user, principal }) => {
     const brain = await resolveBrain(tx, req, principal);
@@ -60,6 +82,10 @@ export const POST = authedTenantRoute(
     }
 
     const parsed = parseDocument(content, path);
+    const provenance = deriveProvenance({
+      agentId: principal.agentId,
+      source,
+    });
 
     const doc = await tx.vaultDocument.create({
       data: {
@@ -80,6 +106,11 @@ export const POST = authedTenantRoute(
         wikilinks: parsed.wikilinks,
         fileModified: new Date(),
         syncedAt: new Date(),
+        // Validation defaults: every new doc starts unvalidated. Provenance
+        // is derived from (principal, source) so agent-authored content is
+        // visibly distinct from user-typed content at retrieval time.
+        provenance,
+        validationStatus: "unvalidated",
       },
     });
     // Genesis version row — parentHash null, versionN = 1.

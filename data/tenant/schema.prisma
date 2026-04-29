@@ -34,12 +34,14 @@ model Brain {
   version   Int      @default(0)
   createdAt DateTime @default(now()) @map("created_at")
 
-  documents  VaultDocument[]
-  links      DocumentLink[]
-  files      VaultFile[]
-  changeLogs VaultChangeLog[]
-  access     BrainAccess[]
-  versions   VaultDocumentVersion[]
+  documents      VaultDocument[]
+  links          DocumentLink[]
+  files          VaultFile[]
+  changeLogs     VaultChangeLog[]
+  access         BrainAccess[]
+  versions       VaultDocumentVersion[]
+  validationLogs VaultValidationLog[]
+  settings       BrainSettings?
 
   @@index([name])
   @@map("brains")
@@ -119,11 +121,26 @@ model VaultDocument {
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
-  brain         Brain                   @relation(fields: [brainId], references: [id])
-  changeLogs    VaultChangeLog[]
-  versions      VaultDocumentVersion[]
-  outgoingLinks DocumentLink[]          @relation("outgoing")
-  incomingLinks DocumentLink[]          @relation("incoming")
+  // Provenance & validation. See proposals/aju-validation-layer.md.
+  // - provenance: where the doc came from (human typed, agent wrote, ingested)
+  // - validationStatus: human review verdict (unvalidated|validated|stale|disqualified)
+  // - validatedHash: snapshot of contentHash at validation time. Stale detection
+  //   compares this to the live contentHash; mismatch means the validated text
+  //   has been edited since.
+  provenance       String    @default("human") @map("provenance")
+  validationStatus String    @default("unvalidated") @map("validation_status")
+  validatedAt      DateTime? @map("validated_at")
+  validatedBy      String?   @map("validated_by")
+  validatedHash    String?   @map("validated_hash")
+  disqualifiedAt   DateTime? @map("disqualified_at")
+  disqualifiedBy   String?   @map("disqualified_by")
+
+  brain          Brain                  @relation(fields: [brainId], references: [id])
+  changeLogs     VaultChangeLog[]
+  versions       VaultDocumentVersion[]
+  validationLogs VaultValidationLog[]
+  outgoingLinks  DocumentLink[]         @relation("outgoing")
+  incomingLinks  DocumentLink[]         @relation("incoming")
 
   @@unique([brainId, path])
   @@index([brainId])
@@ -131,6 +148,9 @@ model VaultDocument {
   @@index([docType])
   @@index([docStatus])
   @@index([directory])
+  @@index([brainId, validationStatus])
+  @@index([brainId, provenance])
+  @@index([brainId, validationStatus, validatedAt])
   @@map("vault_documents")
 }
 
@@ -211,6 +231,63 @@ model VaultChangeLog {
   @@index([source, createdAt])
   @@index([createdAt])
   @@map("vault_change_log")
+}
+
+/// Append-only history of validation state changes. Sibling to
+/// vault_change_log so validation events don't pollute the content edit
+/// log and can have their own retention/audit story. `contentHashAt`
+/// records what was being validated at the time so a later "is this
+/// validation still meaningful?" question can be answered without joining
+/// against the version log.
+model VaultValidationLog {
+  id             String   @id @default(cuid())
+  brainId        String   @map("brain_id")
+  documentId     String   @map("document_id")
+  /// Denormalized like vault_change_log so history queries don't need a join.
+  path           String
+  fromStatus     String   @map("from_status")
+  toStatus       String   @map("to_status")
+  fromProvenance String?  @map("from_provenance")
+  toProvenance   String?  @map("to_provenance")
+  /// contentHash at the moment of the event. Lets a future reader
+  /// reconstruct what was being validated/disqualified, even if the
+  /// document has since been edited.
+  contentHashAt  String   @map("content_hash_at")
+  source         String  // cli | web | mcp | system
+  changedBy      String?  @map("changed_by")
+  actorType      String?  @map("actor_type") // user | agent | system
+  reason         String?
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  brain    Brain         @relation(fields: [brainId], references: [id])
+  document VaultDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([brainId])
+  @@index([documentId, createdAt])
+  @@index([brainId, toStatus, createdAt])
+  @@map("vault_validation_log")
+}
+
+/// Per-brain configuration. Sibling table (not columns on Brain) so the
+/// optimistic-locking `version` counter on Brain doesn't bump every time
+/// a setting changes. First settings row in the codebase — keep it lean
+/// and add knobs as they earn their keep.
+model BrainSettings {
+  brainId                String   @id @map("brain_id")
+  /// Days after which a `validated` doc gains the `staleByTime` flag in
+  /// search results. Computed at result time, not stored — half-life
+  /// changes take effect immediately.
+  validationHalfLifeDays Int      @default(180) @map("validation_half_life_days")
+  /// Ranking boost applied to validated docs at search time. Starting
+  /// guesses; tune against real query distributions.
+  rankWeightValidated    Float    @default(0.10) @map("rank_weight_validated")
+  rankWeightStale        Float    @default(-0.05) @map("rank_weight_stale")
+  rankWeightHuman        Float    @default(0.05) @map("rank_weight_human")
+  updatedAt              DateTime @updatedAt @map("updated_at")
+
+  brain Brain @relation(fields: [brainId], references: [id], onDelete: Cascade)
+
+  @@map("brain_settings")
 }
 
 model VaultFile {

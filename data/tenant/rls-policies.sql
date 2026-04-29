@@ -121,6 +121,32 @@ CREATE POLICY brain_isolation ON "vault_document_versions"
     OR brain_id = ANY(string_to_array(current_setting('app.current_brain_ids', true), ','))
   );
 
+ALTER TABLE "vault_validation_log" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "vault_validation_log" FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS brain_isolation ON "vault_validation_log";
+CREATE POLICY brain_isolation ON "vault_validation_log"
+  USING (
+    current_setting('app.bypass_rls', true) = 'on'
+    OR brain_id = ANY(string_to_array(current_setting('app.current_brain_ids', true), ','))
+  )
+  WITH CHECK (
+    current_setting('app.bypass_rls', true) = 'on'
+    OR brain_id = ANY(string_to_array(current_setting('app.current_brain_ids', true), ','))
+  );
+
+ALTER TABLE "brain_settings" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "brain_settings" FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS brain_isolation ON "brain_settings";
+CREATE POLICY brain_isolation ON "brain_settings"
+  USING (
+    current_setting('app.bypass_rls', true) = 'on'
+    OR brain_id = ANY(string_to_array(current_setting('app.current_brain_ids', true), ','))
+  )
+  WITH CHECK (
+    current_setting('app.bypass_rls', true) = 'on'
+    OR brain_id = ANY(string_to_array(current_setting('app.current_brain_ids', true), ','))
+  );
+
 -- ---------- brains (policy compares id directly) ----------
 
 ALTER TABLE "brains" ENABLE ROW LEVEL SECURITY;

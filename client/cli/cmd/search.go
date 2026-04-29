@@ -11,24 +11,37 @@ import (
 	"strings"
 )
 
+// validationBlock matches the per-result `validation` field returned by
+// the search routes when the validation layer is enabled. Files don't
+// carry validation state, so the field is nullable for non-document rows.
+type validationBlock struct {
+	Status      string `json:"status"`
+	Provenance  string `json:"provenance"`
+	ValidatedAt string `json:"validatedAt,omitempty"`
+	ValidatedBy string `json:"validatedBy,omitempty"`
+	StaleByTime bool   `json:"staleByTime,omitempty"`
+}
+
 // searchResult matches the shape returned by /api/vault/search and
 // /api/vault/semantic-search (superset of both).
 type searchResult struct {
-	ID         string   `json:"id,omitempty"`
-	Path       string   `json:"path"`
-	Title      string   `json:"title,omitempty"`
-	Section    string   `json:"section,omitempty"`
-	DocType    string   `json:"docType,omitempty"`
-	DocStatus  string   `json:"docStatus,omitempty"`
-	Tags       []string `json:"tags,omitempty"`
-	WordCount  int      `json:"wordCount,omitempty"`
-	SourceType string   `json:"sourceType,omitempty"`
-	MimeType   string   `json:"mimeType,omitempty"`
-	Brain      string   `json:"brain,omitempty"`
-	Rank       float64  `json:"rank,omitempty"`
-	RRFScore   float64  `json:"rrfScore,omitempty"`
-	Similarity float64  `json:"similarity,omitempty"`
-	Snippet    string   `json:"snippet,omitempty"`
+	ID         string           `json:"id,omitempty"`
+	Path       string           `json:"path"`
+	Title      string           `json:"title,omitempty"`
+	Section    string           `json:"section,omitempty"`
+	DocType    string           `json:"docType,omitempty"`
+	DocStatus  string           `json:"docStatus,omitempty"`
+	Tags       []string         `json:"tags,omitempty"`
+	WordCount  int              `json:"wordCount,omitempty"`
+	SourceType string           `json:"sourceType,omitempty"`
+	MimeType   string           `json:"mimeType,omitempty"`
+	Brain      string           `json:"brain,omitempty"`
+	Rank       float64          `json:"rank,omitempty"`
+	RRFScore   float64          `json:"rrfScore,omitempty"`
+	Similarity float64          `json:"similarity,omitempty"`
+	Score      float64          `json:"score,omitempty"`
+	Snippet    string           `json:"snippet,omitempty"`
+	Validation *validationBlock `json:"validation,omitempty"`
 }
 
 type searchResponse struct {
@@ -39,19 +52,66 @@ type searchResponse struct {
 	Results []searchResult `json:"results"`
 }
 
+// validationFlags wires the four shared validation flags (--facts,
+// --include-stale, --include-disqualified, --provenance) onto a flag set
+// and returns getter functions that callers invoke after parseFlags. Same
+// shape used by search, semantic, and deep-search so the CLI surface stays
+// uniform.
+type validationFlags struct {
+	facts          *bool
+	includeStale   *bool
+	includeDisq    *bool
+	provenance     *string
+	showValidation *bool
+}
+
+func registerValidationFlags(fs *flag.FlagSet) *validationFlags {
+	return &validationFlags{
+		facts:          fs.Bool("facts", false, "strict mode: only validated results"),
+		includeStale:   fs.Bool("include-stale", true, "include stale results (default true; --include-stale=false to exclude)"),
+		includeDisq:    fs.Bool("include-disqualified", false, "include disqualified results (debug / history mode)"),
+		provenance:     fs.String("provenance", "", "filter by provenance: human|agent|ingested"),
+		showValidation: fs.Bool("show-validation", true, "show validation marker in results (default on)"),
+	}
+}
+
+// applyValidationParams writes the validation flags into the outgoing
+// query string. Defaults match the server (exclude disqualified, keep
+// stale) so we only set params when the user has explicitly opted in.
+func (v *validationFlags) applyValidationParams(params url.Values) {
+	if *v.facts {
+		params.Set("facts", "1")
+	}
+	if !*v.includeStale {
+		params.Set("includeStale", "0")
+	}
+	if *v.includeDisq {
+		params.Set("includeDisqualified", "1")
+	}
+	if p := strings.TrimSpace(*v.provenance); p != "" {
+		switch p {
+		case "human", "agent", "ingested":
+			params.Set("provenance", p)
+		}
+	}
+}
+
 // Search runs the keyword search command.
 func Search(args []string) error {
 	fs := flag.NewFlagSet("search", flag.ContinueOnError)
 	brain := fs.String("brain", "", "brain name, comma-separated list ('a,b'), or 'all' (defaults to active brain)")
 	limit := fs.Int("limit", 20, "maximum results to return")
 	jsonOut := fs.Bool("json", false, "print raw JSON")
+	vf := registerValidationFlags(fs)
 	setLeafUsage(fs, leafHelp{
 		Summary: "Keyword (FTS) search across one or many brains.",
-		Usage:   "aju search <query> [--brain <name|a,b|all>] [--limit N] [--json]",
+		Usage:   "aju search <query> [--brain <name|a,b|all>] [--limit N] [--json] [--facts] [--provenance human|agent|ingested]",
 		Examples: []string{
 			"aju search \"NDC parity\"",
 			"aju search ndc --brain Personal,Acme",
 			"aju search ndc --brain all --limit 50",
+			"aju search ndc --facts                # validated only",
+			"aju search ndc --provenance human     # exclude agent-authored",
 		},
 	})
 	if err := parseFlags(fs, args); err != nil {
@@ -59,7 +119,7 @@ func Search(args []string) error {
 	}
 	query := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if query == "" {
-		return errors.New("usage: aju search <query> [--brain <name|a,b|all>] [--limit <n>] [--json]")
+		return errors.New("usage: aju search <query> [--brain <name|a,b|all>] [--limit <n>] [--json] [--facts]")
 	}
 
 	client, cfg, err := loadAuthedClient()
@@ -71,6 +131,7 @@ func Search(args []string) error {
 	params.Set("q", query)
 	params.Set("limit", strconv.Itoa(*limit))
 	addBrains(params, parseBrainList(*brain, cfg))
+	vf.applyValidationParams(params)
 
 	var resp searchResponse
 	if err := client.GetJSON("/api/vault/search", params, &resp); err != nil {
@@ -80,7 +141,7 @@ func Search(args []string) error {
 	if *jsonOut {
 		return printJSON(&resp)
 	}
-	printSearchResults(resp.Results)
+	printSearchResults(resp.Results, *vf.showValidation)
 	return nil
 }
 
@@ -231,20 +292,24 @@ func printDeepSearchResults(resp *deepSearchResponse) {
 	}
 }
 
-// Semantic runs the semantic (vector or hybrid) search command.
+// Semantic runs the semantic (vector or hybrid) search command. Also
+// reachable via `aju semantic-search` (alias registered in main.go) for
+// callers following the spec phrasing.
 func Semantic(args []string) error {
 	fs := flag.NewFlagSet("semantic", flag.ContinueOnError)
 	brain := fs.String("brain", "", "brain name, comma-separated list ('a,b'), or 'all' (defaults to active brain)")
 	mode := fs.String("mode", "hybrid", "search mode: hybrid|vector")
 	limit := fs.Int("limit", 20, "maximum results to return")
 	jsonOut := fs.Bool("json", false, "print raw JSON")
+	vf := registerValidationFlags(fs)
 	setLeafUsage(fs, leafHelp{
 		Summary: "Semantic search (hybrid FTS+vector by default).",
-		Usage:   "aju semantic <query> [--brain <name|a,b|all>] [--mode hybrid|vector] [--limit N] [--json]",
+		Usage:   "aju semantic <query> [--brain <name|a,b|all>] [--mode hybrid|vector] [--limit N] [--json] [--facts] [--provenance human|agent|ingested]",
 		Long:    "Use --mode vector for pure-embedding similarity; hybrid wins on most mixed queries.",
 		Examples: []string{
 			"aju semantic \"how did we think about NDC vs GDS\"",
 			"aju semantic ndc --brain all --mode vector",
+			"aju semantic ndc --facts                # validated only",
 		},
 	})
 	if err := parseFlags(fs, args); err != nil {
@@ -252,7 +317,7 @@ func Semantic(args []string) error {
 	}
 	query := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if query == "" {
-		return errors.New("usage: aju semantic <query> [--brain <name|a,b|all>] [--mode hybrid|vector] [--limit <n>] [--json]")
+		return errors.New("usage: aju semantic <query> [--brain <name|a,b|all>] [--mode hybrid|vector] [--limit <n>] [--json] [--facts]")
 	}
 	if *mode != "hybrid" && *mode != "vector" {
 		return fmt.Errorf("invalid --mode %q (expected hybrid or vector)", *mode)
@@ -268,6 +333,7 @@ func Semantic(args []string) error {
 	params.Set("mode", *mode)
 	params.Set("limit", strconv.Itoa(*limit))
 	addBrains(params, parseBrainList(*brain, cfg))
+	vf.applyValidationParams(params)
 
 	var resp searchResponse
 	if err := client.GetJSON("/api/vault/semantic-search", params, &resp); err != nil {
@@ -277,11 +343,35 @@ func Semantic(args []string) error {
 	if *jsonOut {
 		return printJSON(&resp)
 	}
-	printSearchResults(resp.Results)
+	printSearchResults(resp.Results, *vf.showValidation)
 	return nil
 }
 
-func printSearchResults(results []searchResult) {
+// validationMarker returns a single-character glyph for the result's
+// validation state. Stays in the leftmost column so it's easy to scan in
+// terminal output.
+//
+//	V validated · S stale · D disqualified · ~ stale-by-time · · unvalidated/none
+func validationMarker(v *validationBlock) string {
+	if v == nil {
+		return " "
+	}
+	switch v.Status {
+	case "validated":
+		if v.StaleByTime {
+			return "~" // validated but past half-life
+		}
+		return "V"
+	case "stale":
+		return "S"
+	case "disqualified":
+		return "D"
+	default:
+		return "·"
+	}
+}
+
+func printSearchResults(results []searchResult, showValidation bool) {
 	if len(results) == 0 {
 		fmt.Fprintln(os.Stderr, "No results.")
 		return
@@ -299,7 +389,10 @@ func printSearchResults(results []searchResult) {
 		}
 	}
 	for _, r := range results {
-		score := r.RRFScore
+		score := r.Score
+		if score == 0 {
+			score = r.RRFScore
+		}
 		if score == 0 {
 			score = r.Similarity
 		}
@@ -310,10 +403,14 @@ func printSearchResults(results []searchResult) {
 		if snippet == "" {
 			snippet = r.Title
 		}
+		marker := ""
+		if showValidation {
+			marker = validationMarker(r.Validation) + "\t"
+		}
 		if showBrain {
-			fmt.Printf("%s\t%.4f\t[%s] %s\n", r.Path, score, r.Brain, snippet)
+			fmt.Printf("%s%s\t%.4f\t[%s] %s\n", marker, r.Path, score, r.Brain, snippet)
 		} else {
-			fmt.Printf("%s\t%.4f\t%s\n", r.Path, score, snippet)
+			fmt.Printf("%s%s\t%.4f\t%s\n", marker, r.Path, score, snippet)
 		}
 	}
 }

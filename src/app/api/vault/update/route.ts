@@ -119,6 +119,43 @@ export const POST = authedTenantRoute(
 
     const parsed = parseDocument(resolvedContent, path);
 
+    // Auto-invalidation: editing the content invalidates a prior validation.
+    // Two transitions, both same-tx so the validation state never desyncs
+    // from the content.
+    //   - validated -> stale: hash mismatch means the validated text was
+    //     edited. Don't clear validatedAt/By/Hash — the original validation
+    //     event is preserved in the log; re-validation rewrites the snapshot.
+    //   - disqualified -> unvalidated: editing a disqualified doc is a
+    //     correction in progress; drop it back to unvalidated so the user
+    //     can re-evaluate without manually clearing.
+    let nextValidationStatus = existing.validationStatus;
+    let validationLogTransition: {
+      from: string;
+      to: string;
+      reason: string;
+    } | null = null;
+
+    if (parsed.contentHash !== existing.contentHash) {
+      if (
+        existing.validationStatus === "validated" &&
+        existing.validatedHash !== parsed.contentHash
+      ) {
+        nextValidationStatus = "stale";
+        validationLogTransition = {
+          from: "validated",
+          to: "stale",
+          reason: "auto: content edited",
+        };
+      } else if (existing.validationStatus === "disqualified") {
+        nextValidationStatus = "unvalidated";
+        validationLogTransition = {
+          from: "disqualified",
+          to: "unvalidated",
+          reason: "auto: disqualified content edited",
+        };
+      }
+    }
+
     const updated = await tx.vaultDocument.update({
       where: { id: existing.id },
       data: {
@@ -136,8 +173,34 @@ export const POST = authedTenantRoute(
         section: parsed.section,
         wikilinks: parsed.wikilinks,
         syncedAt: new Date(),
+        validationStatus: nextValidationStatus,
+        // Clearing the disqualified pointer when editing a disqualified
+        // doc keeps the doc-level state consistent. The history log row
+        // below preserves who/when the original disqualification was.
+        ...(validationLogTransition?.to === "unvalidated"
+          ? { disqualifiedAt: null, disqualifiedBy: null }
+          : {}),
       },
     });
+
+    if (validationLogTransition) {
+      await tx.vaultValidationLog.create({
+        data: {
+          brainId: brain.brainId,
+          documentId: existing.id,
+          path,
+          fromStatus: validationLogTransition.from,
+          toStatus: validationLogTransition.to,
+          fromProvenance: existing.provenance,
+          toProvenance: existing.provenance,
+          contentHashAt: parsed.contentHash,
+          source: "system",
+          changedBy: principal.identity,
+          actorType: principal.agentId ? "agent" : "user",
+          reason: validationLogTransition.reason,
+        },
+      });
+    }
     // Append a version row. parentHash points at the head we replaced;
     // mergeParentHash captures the caller's baseHash on auto-merged
     // commits so the history forms a proper DAG of parent + merge-parent.
