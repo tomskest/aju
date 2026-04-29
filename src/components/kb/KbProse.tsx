@@ -350,59 +350,34 @@ function KbProseInner({ html, className }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    console.log("[kb-prose] effect fired, html bytes:", html?.length ?? 0);
     const root = containerRef.current;
-    if (!root) {
-      console.log("[kb-prose] bailout: no containerRef");
-      return;
-    }
+    if (!root) return;
 
     const codeBlocks = Array.from(
       root.querySelectorAll<HTMLElement>("code.language-mermaid"),
     );
-    console.log("[kb-prose] codeBlocks found:", codeBlocks.length);
     if (codeBlocks.length === 0) return;
 
     let cancelled = false;
 
-    const obs = new MutationObserver((muts) => {
-      for (const m of muts) {
-        if (m.type === "childList" && (m.addedNodes.length || m.removedNodes.length)) {
-          console.log("[kb-prose] DOM mutation in kb-prose:", {
-            target: (m.target as Element).tagName,
-            added: m.addedNodes.length,
-            removed: m.removedNodes.length,
-            removedTags: Array.from(m.removedNodes).map((n) => (n as Element).tagName).join(","),
-          });
-        }
-      }
-    });
-    obs.observe(root, { childList: true, subtree: true });
-
     (async () => {
-      console.log("[kb-prose] loading mermaid…");
       const mermaid = await loadMermaid();
-      console.log("[kb-prose] mermaid loaded, cancelled?", cancelled);
       if (cancelled) return;
 
       for (let i = 0; i < codeBlocks.length; i++) {
         const codeEl = codeBlocks[i];
         const pre = codeEl.parentElement;
-        console.log("[kb-prose] iter", i, "parentTag:", pre?.tagName, "enhanced:", pre?.dataset.mermaidEnhanced);
         if (!pre || pre.tagName !== "PRE") continue;
         if (pre.dataset.mermaidEnhanced === "1") continue;
 
         const source = codeEl.textContent ?? "";
         const id = `mermaid-${Date.now()}-${i}`;
-        console.log("[kb-prose] calling mermaid.render", { id, sourceBytes: source.length, hasNewlines: source.includes("\n") });
 
         let svg: string;
         try {
           const result = await mermaid.render(id, source);
           svg = result.svg;
-          console.log("[kb-prose] render OK, svg bytes:", svg.length);
         } catch (err) {
-          console.error("[kb-prose] render threw:", err);
           pre.dataset.mermaidEnhanced = "error";
           const note = document.createElement("div");
           note.className = "mermaid-error";
@@ -463,9 +438,7 @@ function KbProseInner({ html, className }: Props) {
           if (svgEl) openMermaidFullscreen(svgEl);
         });
 
-        console.log("[kb-prose] replacing pre with figure, pre still in DOM?", document.contains(pre));
         pre.replaceWith(figure);
-        console.log("[kb-prose] replace done, figure in DOM?", document.contains(figure));
       }
     })().catch((err) => {
       console.error("[kb-prose] mermaid enhancement failed:", err);
@@ -473,7 +446,6 @@ function KbProseInner({ html, className }: Props) {
 
     return () => {
       cancelled = true;
-      obs.disconnect();
     };
   }, [html]);
 
