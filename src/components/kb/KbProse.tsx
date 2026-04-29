@@ -486,7 +486,7 @@ function KbProseInner({ html, className }: Props) {
   );
 }
 
-// Memoized so parent re-renders (e.g. validation state change in
+// Memoized so parent re-renders (e.g., validation state change in
 // BrainExplorer) don't reset `dangerouslySetInnerHTML`, which would detach
 // the `<pre>` mid-flight while mermaid is still rendering and leave the
 // resulting <figure> orphaned. React 19 (19.2.5) re-applies innerHTML on
