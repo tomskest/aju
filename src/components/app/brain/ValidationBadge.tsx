@@ -81,8 +81,11 @@ function describe(state: ValidationState): string {
   parts.push(`Status: ${state.status}`);
   parts.push(`Provenance: ${state.provenance}`);
   if (state.validatedAt) {
+    // ISO date (not toLocaleDateString) so server and client render the
+    // same string in this `title` attribute. Localized form lives in the
+    // ValidationPicker popover.
     parts.push(
-      `Validated ${new Date(state.validatedAt).toLocaleDateString()}` +
+      `Validated ${state.validatedAt.slice(0, 10)}` +
         (state.validatedBy ? ` by ${state.validatedBy}` : ""),
     );
   }

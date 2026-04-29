@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import KbProse from "@/components/kb/KbProse";
 import DocToc from "@/components/kb/DocToc";
+import LocalDate from "@/components/kb/LocalDate";
 import ValidationPicker from "./ValidationPicker";
 import ValidationBar from "./ValidationBar";
 import type { ValidationState } from "./ValidationBadge";
@@ -460,7 +461,7 @@ export default function BrainExplorer({
                 </h1>
                 <p className="shrink-0 font-mono text-[11px] text-[var(--color-faint)]">
                   {currentDoc.wordCount} words ·{" "}
-                  {new Date(currentDoc.updatedAt).toLocaleDateString()}
+                  <LocalDate value={currentDoc.updatedAt} />
                 </p>
               </div>
               {canWrite && (
@@ -986,7 +987,7 @@ function HistoryPanel({
                     {v.contentHash.slice(0, 10)}…
                   </p>
                   <p className="font-mono text-[10px] text-[var(--color-muted)]">
-                    {new Date(v.createdAt).toLocaleString()}
+                    <LocalDate value={v.createdAt} format="datetime" />
                   </p>
                   <p className="font-mono text-[10px] text-[var(--color-faint)]">
                     {v.source}
@@ -1030,7 +1031,7 @@ function VersionPreview({
           </p>
           <p className="font-mono text-[10px] text-[var(--color-faint)]">
             {version.contentHash.slice(0, 16)}… ·{" "}
-            {new Date(version.createdAt).toLocaleString()} ·{" "}
+            <LocalDate value={version.createdAt} format="datetime" /> ·{" "}
             {version.source}
             {version.changedBy ? ` · ${version.changedBy}` : ""}
           </p>

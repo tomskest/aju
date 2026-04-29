@@ -6,6 +6,7 @@ import {
   type ValidationState,
   type ValidationStatus,
 } from "./ValidationBadge";
+import LocalDate from "@/components/kb/LocalDate";
 
 type LogEntry = {
   id: string;
@@ -230,7 +231,7 @@ export default function ValidationPicker({
           )}
           {fallback.validatedAt && (
             <p className="mt-2 font-mono text-[10px] text-[var(--color-faint)]">
-              Validated {new Date(fallback.validatedAt).toLocaleString()}
+              Validated <LocalDate value={fallback.validatedAt} format="datetime" />
               {fallback.validatedBy ? ` by ${fallback.validatedBy}` : ""}
             </p>
           )}
@@ -264,7 +265,7 @@ export default function ValidationPicker({
                     className="mb-1 font-mono text-[10px] text-[var(--color-muted)]"
                   >
                     <span className="text-[var(--color-faint)]">
-                      {new Date(e.createdAt).toLocaleString()}
+                      <LocalDate value={e.createdAt} format="datetime" />
                     </span>{" "}
                     <span>
                       {e.fromStatus} → <strong>{e.toStatus}</strong>
