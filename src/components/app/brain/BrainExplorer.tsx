@@ -860,16 +860,10 @@ function buildTree(docs: DocSummary[]): TreeNode[] {
 }
 
 function initialOpenFolders(
-  docs: DocSummary[],
+  _docs: DocSummary[],
   currentPath: string | null,
 ): Set<string> {
   const open = new Set<string>();
-  for (const doc of docs) {
-    const parts = doc.path.split("/");
-    for (let i = 1; i < parts.length; i++) {
-      open.add(parts.slice(0, i).join("/"));
-    }
-  }
   if (currentPath) {
     const parts = currentPath.split("/");
     for (let i = 1; i < parts.length; i++) {
