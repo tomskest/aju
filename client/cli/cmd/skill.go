@@ -10,6 +10,9 @@ import (
 	"sort"
 	"strings"
 	"text/template"
+
+	"github.com/tomskest/aju/client/cli/internal/config"
+	"github.com/tomskest/aju/client/cli/internal/httpx"
 )
 
 // skillBodyTemplate is the SKILL.md Go text/template rendered by
@@ -26,6 +29,20 @@ type skillBrain struct {
 	DocumentCount int
 }
 
+// skillProfile is one (profile → org → brains) row in the rendered skill.
+// Each non-empty local profile holds a key pinned to a single org server-side,
+// so the routing table written into SKILL.md can tell Claude exactly which
+// `--profile <name>` flag targets which org and which brains live there.
+type skillProfile struct {
+	Name      string
+	OrgName   string
+	OrgSlug   string
+	OrgType   string // "personal" | "team"
+	IsActive  bool
+	IsDefault bool
+	Brains    []skillBrain
+}
+
 type skillContext struct {
 	UserName          string
 	UserEmail         string
@@ -33,6 +50,14 @@ type skillContext struct {
 	Brains            []skillBrain
 	BrainNames        string // comma-joined quoted list for the description
 	FirstBrainExample string
+
+	// Multi-profile context. Each entry maps one local profile to its
+	// pinned org and the brains visible inside that org. Empty for callers
+	// without an authenticated config, in which case the template falls
+	// back to the single-brain shape above.
+	Profiles       []skillProfile
+	ActiveProfile  string
+	DefaultProfile string
 }
 
 // skillTarget represents one tool aju can register itself with.
@@ -129,7 +154,100 @@ func buildSkillContext() (skillContext, error) {
 		ctx.FirstBrainExample = ctx.Brains[0].Name
 	}
 
+	if cfg != nil {
+		ctx.ActiveProfile = cfg.Active
+		ctx.DefaultProfile = cfg.DefaultProfile
+		ctx.Profiles = collectSkillProfiles(cfg)
+	}
+
 	return ctx, nil
+}
+
+// collectSkillProfiles walks every locally-stored profile with a non-empty
+// API key, hits /api/orgs and /api/brains with that key, and returns the
+// resolved (profile → org → brains) view used to render the skill's routing
+// table. Best-effort: a single profile failing to resolve does not bubble
+// up — its row is dropped from the output and other profiles still render.
+func collectSkillProfiles(cfg *config.Config) []skillProfile {
+	if cfg == nil {
+		return nil
+	}
+	names := cfg.ProfileNames()
+	out := make([]skillProfile, 0, len(names))
+	for _, name := range names {
+		p := cfg.Profiles[name]
+		if p == nil || p.Key == "" {
+			continue
+		}
+		server := p.Server
+		if server == "" {
+			server = config.DefaultServer
+		}
+		client := httpx.New(server, p.Key)
+
+		sp := skillProfile{
+			Name:      name,
+			IsActive:  name == cfg.Active,
+			IsDefault: name == cfg.DefaultProfile,
+		}
+
+		var orgs orgsListResp
+		if err := client.Get("/api/orgs", &orgs); err == nil {
+			if target := pickPinnedOrg(orgs.Orgs, orgs.ActiveOrganizationID, p.Org); target != nil {
+				sp.OrgName = target.Name
+				sp.OrgSlug = target.Slug
+				sp.OrgType = "team"
+				if target.IsPersonal {
+					sp.OrgType = "personal"
+				}
+			}
+		}
+
+		var brains brainsListResp
+		if err := client.Get("/api/brains", &brains); err == nil {
+			for _, b := range brains.Brains {
+				sp.Brains = append(sp.Brains, skillBrain{
+					Name:          b.Name,
+					Type:          b.Type,
+					Role:          b.Role,
+					DocumentCount: b.DocumentCount,
+				})
+			}
+		}
+
+		out = append(out, sp)
+	}
+	return out
+}
+
+// pickPinnedOrg picks the org a profile binds to. Preference order: the
+// profile's locally-recorded slug (set at auto-provision time), then the
+// server's active-org cookie (legacy unpinned keys), then the user's
+// personal org, then the only org if there is exactly one.
+func pickPinnedOrg(orgs []orgSummary, activeID, profileSlug string) *orgSummary {
+	if profileSlug != "" {
+		for i := range orgs {
+			if orgs[i].Slug == profileSlug {
+				return &orgs[i]
+			}
+		}
+	}
+	if activeID != "" {
+		for i := range orgs {
+			if orgs[i].ID == activeID {
+				return &orgs[i]
+			}
+		}
+	}
+	for i := range orgs {
+		if orgs[i].IsPersonal {
+			return &orgs[i]
+		}
+	}
+	if len(orgs) == 1 {
+		return &orgs[0]
+	}
+	return nil
 }
 
 // renderSkillBody executes the embedded template against the given context.

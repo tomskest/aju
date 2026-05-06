@@ -165,6 +165,11 @@ named profile (or the currently-active profile).`,
 				if err := autoProvisionOrgProfiles(httpx.New(base, poll.APIKey), cfg); err != nil {
 					fmt.Fprintf(os.Stderr, "(could not auto-mint per-org keys: %v)\n", err)
 				}
+				// If a Claude skill is already installed on this machine,
+				// refresh it so the per-profile routing table reflects the
+				// orgs we just provisioned. Best-effort: a missing skill or
+				// render failure must not break login.
+				refreshInstalledSkills()
 				return nil
 			case "denied":
 				fmt.Println("Authorization denied.")
@@ -259,8 +264,30 @@ func autoProvisionOrgProfiles(client *httpx.Client, cfg *config.Config) error {
 	if created > 1 {
 		noun = "profiles"
 	}
-	fmt.Printf("Provisioned %d additional %s. Switch with `aju orgs switch <slug>`.\n", created, noun)
+	fmt.Printf("Provisioned %d additional %s. Target one per call with `--profile <name>` or `AJU_PROFILE=<name>`; parallel shells stay isolated.\n", created, noun)
 	return nil
+}
+
+// refreshInstalledSkills re-renders any skill targets whose output file
+// already exists on disk. Called from `aju login` after profile changes so
+// the skill's per-profile routing table reflects the new inventory without
+// the user having to re-run `aju skill install`.
+//
+// Best-effort: errors are surfaced to stderr but never fail the login.
+func refreshInstalledSkills() {
+	for _, name := range skillTargetNames() {
+		t := skillTargets[name]
+		path, err := t.path()
+		if err != nil {
+			continue
+		}
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		if err := SkillInstall([]string{name, "--force"}); err != nil {
+			fmt.Fprintf(os.Stderr, "(could not refresh %s skill: %v)\n", t.label, err)
+		}
+	}
 }
 
 // Logout revokes every per-org key minted by `aju login` and clears them

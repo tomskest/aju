@@ -87,11 +87,11 @@ export default async function Home({
   const returnTo = safeReturnTo(params.return_to);
   const initialEmail = safeEmailPrefill(params.email);
 
-  // If the user is already signed in and arrived here because something else
-  // bounced them through aju.sh to complete auth (e.g. mcp.aju.sh's OAuth
-  // flow), skip the landing page entirely and send them onward.
-  if (signedInUser && returnTo) {
-    redirect(returnTo);
+  // Signed-in users skip the landing page: forward to a same-origin/aju.sh
+  // `return_to` if one was passed (e.g. mcp.aju.sh's OAuth flow), otherwise
+  // drop them straight into the app.
+  if (signedInUser) {
+    redirect(returnTo ?? "/app");
   }
 
   const navRight = signedInUser ? (

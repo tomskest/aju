@@ -8,30 +8,37 @@ allowed-tools: Bash
 
 The `aju` CLI is already installed and authenticated on this machine. Use it via Bash for every memory operation. Documents are markdown files stored in brains; paths inside a brain look like `journal/2026-04-17.md` or `topics/databases.md`.
 
-## Identity + accessible brains
+## Identity, profiles, and accessible brains
 
 You are acting on behalf of **{{.UserName}}**{{if .UserEmail}} (`{{.UserEmail}}`){{end}}.
 
-{{if .Brains}}Active brain: `{{.ActiveBrain}}`
+{{if .Profiles}}Each org this account can access has its own **profile** in `~/.aju/config.json`. A profile bundles (server, API key, pinned org). Pass `--profile <name>` (or export `AJU_PROFILE=<name>`) on any command to target that org for the call only — no session-wide state is mutated, so parallel shells targeting different orgs never collide.
 
-Brains this machine has access to:
+Default profile: `{{.DefaultProfile}}`{{if ne .ActiveProfile .DefaultProfile}} · current process: `{{.ActiveProfile}}`{{end}}.
+
+{{range .Profiles}}### Profile `{{.Name}}`{{if .OrgName}} — {{.OrgName}}{{end}}{{if .OrgType}} ({{.OrgType}} org){{end}}{{if .IsDefault}} · default{{end}}
+
+{{if .Brains}}Brains in this org:
 
 {{range .Brains}}- `{{.Name}}` — {{.Type}} brain, your role: {{.Role}}, {{.DocumentCount}} docs
+{{end}}{{else}}No brains visible to this profile yet.
 {{end}}
-
-### Brain types and organization context
+{{end}}### Brain types
 
 - **Personal brains** (`personal`) live in the user's own workspace and no one else has access.
 - **Org brains** (`org`) are shared inside a team. Other members may be reading and writing them too — treat them like a team wiki, not a private notebook.
-- Each org has its own isolated database under the hood; brains from different orgs never appear in the same search unless the user explicitly passes `--brain a,b`.
+- Each org has its own isolated database under the hood. `--brain a,b` and `--brain all` both span only the brains *inside one org* (the org bound to the active profile). Cross-org queries require running one command per profile and merging the results yourself.
 
-### Routing brain names in user intent
+### Routing user phrasing → profile + brain
 
-- "my brain" / "my vault" / "my notes" (no qualifier) → `{{.ActiveBrain}}`
-- "{{.UserName}}'s brain" → `{{.ActiveBrain}}`
-- Any exact or fuzzy match against the brain names above → that brain (pass `--brain <name>`)
-- "the team brain" / "our brain" / "our shared notes" → the first `org`-type brain in the list, or ask which one if there are multiple.
-- If the user names a brain that isn't in the list above, say so and ask if they want to create it (`aju brains create <name>`) or pick an existing one.
+- "my brain" / "my vault" / "my notes" (no qualifier) → the default profile `{{.DefaultProfile}}` and its first brain.
+- A brain name that appears under exactly one profile above → that profile's brain (pass `--profile <name> --brain <brain>`).
+- A brain name that appears under multiple profiles → ASK the user which org they mean.
+- A phrasing that names one of the orgs above (e.g. "the {{(index .Profiles 0).OrgName}} brain", "our team notes") → the profile that binds to that org.
+- A query that spans multiple orgs → run one command per relevant profile and merge results in your reply; do not try to fuse them in a single call.
+- If the user names a brain that isn't in any list above, say so and offer to create it (`aju brains create <name> --profile <name>`) or pick an existing one.
+
+Never run `aju orgs switch <slug>` or `aju brains switch <name>` to satisfy a user request — both mutate session-wide state and race with parallel shells. Use `--profile` and `--brain` flags per call instead. Touch the persisted defaults only when the user explicitly asks ("make this my default org / brain").
 {{else}}Active brain: `brain` (assumed — skill was installed without an authenticated session, re-run `aju skill install claude --force` after `aju login` to personalize).
 {{end}}
 
@@ -79,7 +86,7 @@ If all three return nothing, the memory doesn't exist yet. Don't fabricate.
 
 Add `--limit <n>` to cap results. `--brain` accepts a single name, a comma-separated list (`--brain personal,work`), or `all` to search every accessible brain in the active org. When multiple brains are searched, `aju search` and `aju semantic` fuse candidates in a single cross-brain RRF pass so scores are directly comparable, and each result row prefixes the snippet with `[brain-name]`. `deep-search` also accepts `--seeds <n>` (default 5), `--depth 1|2` (default 1), and `--section/--type` filters.
 
-**Cross-org caveat.** `--brain all` spans only the *active* org's brains. If the user belongs to multiple orgs (e.g., personal + a work team), switching orgs is a separate step: `aju orgs switch <slug>`.
+**Cross-org caveat.** `--brain all` and `--brain a,b` span only the brains in the org bound to the *active profile*. To reach a different org, pass `--profile <name>` on the same command (or `AJU_PROFILE=<name> aju ...`). For a question that spans multiple orgs, run one command per profile and merge in your reply — never fall back to `aju orgs switch`, which races across parallel shells.
 
 ## Provenance & validation states
 
@@ -354,7 +361,7 @@ aju news                                  # product announcements
 - Overwrite an existing document without first reading its current content (`aju read`, compose locally, then `aju update`).
 - Delete documents without explicit user permission.
 - Write personal notes into an org brain or team notes into a personal brain. If the right target is ambiguous, ask.
-- Switch orgs (`aju orgs switch`) or change the active brain (`aju brains switch`) without user intent — these are session-wide.
+- Run `aju orgs switch` or `aju brains switch` to satisfy your own retrieval needs — both mutate persisted state and race with parallel shells. Use `--profile <name>` and `--brain <name>` per call instead. Only run the persisted-switch commands when the user explicitly asks to change their default.
 
 ## Output conventions
 
