@@ -12,13 +12,22 @@ The `aju` CLI is already installed and authenticated on this machine. Use it via
 
 You are acting on behalf of **{{.UserName}}**{{if .UserEmail}} (`{{.UserEmail}}`){{end}}.
 
-{{if .Profiles}}Each org this account can access has its own **profile** in `~/.aju/config.json`. A profile bundles (server, API key, pinned org). Pass `--profile <name>` (or export `AJU_PROFILE=<name>`) on any command to target that org for the call only — no session-wide state is mutated, so parallel shells targeting different orgs never collide.
+{{if .Profiles}}### Every aju call MUST name a profile
 
-Default profile: `{{.DefaultProfile}}`{{if ne .ActiveProfile .DefaultProfile}} · current process: `{{.ActiveProfile}}`{{end}}.
+`aju` is strict-profile: every brain-touching command (read, browse, search, semantic, deep-search, create, update, delete, validate, files, graph, history, …) refuses to run unless a profile is named explicitly. There is no shared "active org" or "active brain" anymore — `aju orgs switch` and `aju brains switch` are retired, and there is no implicit default for brain-touching ops.
 
-{{range .Profiles}}### Profile `{{.Name}}`{{if .OrgName}} — {{.OrgName}}{{end}}{{if .OrgType}} ({{.OrgType}} org){{end}}{{if .IsDefault}} · default{{end}}
+You select the profile in one of two equivalent ways on every command:
 
-{{if .Brains}}Brains in this org:
+```bash
+aju --profile <name> <command> ...
+AJU_PROFILE=<name> aju <command> ...
+```
+
+A profile in `~/.aju/config.json` bundles (server, API key, pinned brain). Naming the profile names the org too — the API key itself is bound server-side to one org. Forgetting the flag now produces a hard error; this is by design, because silent defaults were how cross-org writes leaked.
+
+{{range .Profiles}}### Profile `{{.Name}}`{{if .OrgName}} — {{.OrgName}}{{end}}{{if .OrgType}} ({{.OrgType}} org){{end}}
+
+{{if .Brains}}Brains reachable with `--profile {{.Name}}`:
 
 {{range .Brains}}- `{{.Name}}` — {{.Type}} brain, your role: {{.Role}}, {{.DocumentCount}} docs
 {{end}}{{else}}No brains visible to this profile yet.
@@ -27,24 +36,24 @@ Default profile: `{{.DefaultProfile}}`{{if ne .ActiveProfile .DefaultProfile}} �
 
 - **Personal brains** (`personal`) live in the user's own workspace and no one else has access.
 - **Org brains** (`org`) are shared inside a team. Other members may be reading and writing them too — treat them like a team wiki, not a private notebook.
-- Each org has its own isolated database under the hood. `--brain a,b` and `--brain all` both span only the brains *inside one org* (the org bound to the active profile). Cross-org queries require running one command per profile and merging the results yourself.
+- Each org has its own isolated database under the hood. `--brain a,b` and `--brain all` both span only the brains *inside one org* (the org bound to `--profile`). Cross-org queries require running one command per profile and merging the results yourself.
 
 ### Routing user phrasing → profile + brain
 
-- "my brain" / "my vault" / "my notes" (no qualifier) → the default profile `{{.DefaultProfile}}` and its first brain.
 - A brain name that appears under exactly one profile above → that profile's brain (pass `--profile <name> --brain <brain>`).
-- A brain name that appears under multiple profiles → ASK the user which org they mean.
+- A brain name that appears under multiple profiles → ASK the user which org they mean before running anything.
 - A phrasing that names one of the orgs above (e.g. "the {{(index .Profiles 0).OrgName}} brain", "our team notes") → the profile that binds to that org.
+- "my brain" / "my notes" / "my vault" with no qualifier → ASK which profile/brain the user means; do not guess. Picking a default is exactly the failure mode strict-profile prevents.
 - A query that spans multiple orgs → run one command per relevant profile and merge results in your reply; do not try to fuse them in a single call.
-- If the user names a brain that isn't in any list above, say so and offer to create it (`aju brains create <name> --profile <name>`) or pick an existing one.
+- If the user names a brain that isn't in any list above, say so and offer to create it (`aju brains create <name> --profile <profile-bound-to-the-target-org>`) or pick an existing one.
 
-Never run `aju orgs switch <slug>` or `aju brains switch <name>` to satisfy a user request — both mutate session-wide state and race with parallel shells. Use `--profile` and `--brain` flags per call instead. Touch the persisted defaults only when the user explicitly asks ("make this my default org / brain").
-{{else}}Active brain: `brain` (assumed — skill was installed without an authenticated session, re-run `aju skill install claude --force` after `aju login` to personalize).
+Never run `aju orgs switch` or `aju brains switch` — both are retired and now print a refusal. Use `--profile` per call. The only commands that work without `--profile` are `aju login`, `aju logout`, `aju profiles {list,show,use,remove}`, `aju version`, and `aju help`.
+{{else}}This skill was installed without an authenticated session — every aju command will fail until you run `aju login --profile <name>` to create a profile, then re-run `aju skill install claude --force` so this skill body picks up the routing table.
 {{end}}
 
 ## Orient yourself before doing anything
 
-On the first aju command of a session, run `aju status` once. It prints the signed-in identity, active brain, and server — a cheap sanity check that catches stale installs, broken auth, or an unexpected active-brain switch. If `aju status` fails or returns unexpected context, stop and tell the user instead of blindly continuing.
+On the first aju command of a session, run `aju status --profile <name>` once for the profile you're about to use. It prints the signed-in identity and server — a cheap sanity check that catches stale installs or broken auth. If it fails, stop and tell the user instead of blindly continuing.
 
 ## What the user wants
 
@@ -63,11 +72,13 @@ Aju is the user's persistent memory — treat it like a real notebook, not a scr
 
 ## Search before anything else
 
+Every example below shows `--profile <name>` because every brain-touching call requires it. Substitute the actual profile name from the routing table above.
+
 ```bash
-aju search "<keyword>"                    # fast FTS keyword search with snippets
-aju semantic "<natural phrasing>"         # meaning-based, catches paraphrases
-aju deep-search "<question>"              # GraphRAG: hybrid seeds + 1–2 hop graph expansion
-aju browse <dir>                          # list docs under a directory prefix
+aju search "<keyword>" --profile <name>            # fast FTS keyword search with snippets
+aju semantic "<natural phrasing>" --profile <name> # meaning-based, catches paraphrases
+aju deep-search "<question>" --profile <name>      # GraphRAG: hybrid seeds + 1–2 hop graph expansion
+aju browse <dir> --profile <name>                  # list docs under a directory prefix
 ```
 
 **Preferred default: run `search` and `semantic` in parallel in a single tool call.** Keyword and meaning-based retrieval catch different things — running both costs ~200ms total but avoids missed hits from paraphrasing. Merge the results, dedupe by path, pick the best.
@@ -75,8 +86,8 @@ aju browse <dir>                          # list docs under a directory prefix
 Example of the parallel pattern:
 ```bash
 # Run both at once in the background, then read results
-aju search "pgvector indexing" &
-aju semantic "how we speed up vector queries" &
+aju search "pgvector indexing" --profile <name> &
+aju semantic "how we speed up vector queries" --profile <name> &
 wait
 ```
 
@@ -84,9 +95,9 @@ wait
 
 If all three return nothing, the memory doesn't exist yet. Don't fabricate.
 
-Add `--limit <n>` to cap results. `--brain` accepts a single name, a comma-separated list (`--brain personal,work`), or `all` to search every accessible brain in the active org. When multiple brains are searched, `aju search` and `aju semantic` fuse candidates in a single cross-brain RRF pass so scores are directly comparable, and each result row prefixes the snippet with `[brain-name]`. `deep-search` also accepts `--seeds <n>` (default 5), `--depth 1|2` (default 1), and `--section/--type` filters.
+Add `--limit <n>` to cap results. `--brain` accepts a single name, a comma-separated list (`--brain personal,work`), or `all` to search every accessible brain in the org bound to `--profile`. When multiple brains are searched, `aju search` and `aju semantic` fuse candidates in a single cross-brain RRF pass so scores are directly comparable, and each result row prefixes the snippet with `[brain-name]`. `deep-search` also accepts `--seeds <n>` (default 5), `--depth 1|2` (default 1), and `--section/--type` filters.
 
-**Cross-org caveat.** `--brain all` and `--brain a,b` span only the brains in the org bound to the *active profile*. To reach a different org, pass `--profile <name>` on the same command (or `AJU_PROFILE=<name> aju ...`). For a question that spans multiple orgs, run one command per profile and merge in your reply — never fall back to `aju orgs switch`, which races across parallel shells.
+**Cross-org queries.** `--brain all` and `--brain a,b` span only the brains in the org bound to `--profile`. For a question that spans multiple orgs, run one command per relevant profile (each with its own `--profile`) and merge results in your reply. There is no single-call cross-org search.
 
 ## Provenance & validation states
 
@@ -111,26 +122,26 @@ Default search already excludes `disqualified` and ranks `validated` higher. Use
 After the user confirms a fact you saved, validate it so future retrieval treats it as canonical:
 
 ```bash
-aju validate <path>            # mark as validated
-aju mark-stale <path>          # flag content as out of date
-aju disqualify <path>          # exclude from future search (wrong/false)
-aju clear-validation <path>    # reset to unvalidated
-aju validation status <path>   # show current state + history
+aju validate <path> --profile <name>            # mark as validated
+aju mark-stale <path> --profile <name>          # flag content as out of date
+aju disqualify <path> --profile <name>          # exclude from future search (wrong/false)
+aju clear-validation <path> --profile <name>    # reset to unvalidated
+aju validation status <path> --profile <name>   # show current state + history
 ```
 
 ## Reading a document
 
 ```bash
-aju read <path>                           # prints frontmatter + body
-aju read <path> --json                    # machine-readable form
+aju read <path> --profile <name>          # prints frontmatter + body
+aju read <path> --json --profile <name>   # machine-readable form
 ```
 
 ## Writing new memory
 
-Prefer stdin redirection for multi-line content:
+Prefer stdin redirection for multi-line content. The profile flag goes on the `aju create` invocation that consumes the heredoc:
 
 ```bash
-cat <<'EOF' | aju create topics/vector-search.md
+cat <<'EOF' | aju create topics/vector-search.md --profile <name>
 ---
 tags: [search, embeddings, pgvector]
 source: claude-code
@@ -154,11 +165,11 @@ EOF
 
 ### Updating existing memory
 
-`update` replaces the full document. To append or modify, read first:
+`update` replaces the full document. To append or modify, read first. Keep `--profile` consistent on read and update — they must target the same profile or you'll edit a doc you didn't read:
 
 ```bash
-current="$(aju read topics/vector-search.md)"
-cat <<EOF | aju update topics/vector-search.md
+current="$(aju read topics/vector-search.md --profile <name>)"
+cat <<EOF | aju update topics/vector-search.md --profile <name>
 $current
 
 ## Update 2026-04-17
@@ -170,8 +181,8 @@ EOF
 ### Deleting
 
 ```bash
-aju delete <path>                         # deletes the document
-aju delete <path> --yes                   # skip confirmation
+aju delete <path> --profile <name>            # deletes the document
+aju delete <path> --yes --profile <name>      # skip confirmation
 ```
 
 Delete sparingly. Prefer archiving (move content to `archive/<path>.md`) if historical context might matter.
@@ -179,60 +190,57 @@ Delete sparingly. Prefer archiving (move content to `archive/<path>.md`) if hist
 ## Graph navigation
 
 ```bash
-aju backlinks <path>                      # what links TO this doc
-aju related <path>                        # related (shared tags + graph proximity)
-aju graph                                 # vault stats: totals, most-linked docs
-aju graph --mode neighbors --path <p>     # 2-hop ego network around a doc
+aju backlinks <path> --profile <name>                  # what links TO this doc
+aju related <path> --profile <name>                    # related (shared tags + graph proximity)
+aju graph --profile <name>                             # vault stats: totals, most-linked docs
+aju graph --mode neighbors --path <p> --profile <name> # 2-hop ego network around a doc
 ```
 
-Use these to walk from one memory to adjacent memories — "show me everything connected to X" is usually `aju read X && aju related X && aju backlinks X`.
+Use these to walk from one memory to adjacent memories — "show me everything connected to X" is usually `aju read X --profile <name> && aju related X --profile <name> && aju backlinks X --profile <name>`.
 
 ## Files (binaries)
 
 ```bash
-aju files list                            # list uploaded files
-aju files read <key>                      # metadata + extracted text
-aju files read <key> --mode url           # presigned download URL
-aju files read <key> --mode content       # base64 file content
-aju files upload <local-path>             # upload a binary (PDF, image, etc.)
-aju files delete <key>                    # remove a file
+aju files list --profile <name>                              # list uploaded files
+aju files read <key> --profile <name>                        # metadata + extracted text
+aju files read <key> --mode url --profile <name>             # presigned download URL
+aju files read <key> --mode content --profile <name>         # base64 file content
+aju files upload <local-path> --profile <name>               # upload a binary (PDF, image, etc.)
+aju files delete <key> --profile <name>                      # remove a file
 ```
 
 PDFs are text-extracted automatically and searchable via `aju search`. Images store EXIF/metadata and can be retrieved via presigned URL for later analysis.
 
-## Multi-brain context
+## Multi-brain context within one profile
 
-Users may own multiple brains (e.g., `brain` for personal, `work` for team). Every read/write command accepts `--brain <name>`:
-
-```bash
-aju search "incident" --brain work
-cat <<< "..." | aju create notes/onboarding.md --brain work
-```
-
-Search commands additionally support spanning brains in a single call:
+Each profile is bound to one org. Within that org, a profile can reach multiple brains. Single-brain commands accept `--brain <name>`; search commands also accept comma-separated lists or `all`:
 
 ```bash
-aju search "incident" --brain personal,work        # two named brains
-aju semantic "NDC parity" --brain all              # every accessible brain
+aju search "incident" --brain work --profile <name>
+cat <<< "..." | aju create notes/onboarding.md --brain work --profile <name>
+
+aju search "incident" --brain personal,work --profile <name>      # two named brains, one org
+aju semantic "NDC parity" --brain all --profile <name>            # every brain in this profile's org
 ```
 
 With multiple brains, server-side RRF fuses all candidates into one ranked list (scores are comparable, no client-side merging needed). Results are prefixed with `[brain-name]` so you can see which brain each hit came from. Mutating commands (`create`, `update`, `delete`, `files *`) stay single-brain because a document lives in exactly one brain.
 
-Manage brains:
+If the profile pins a default brain, `--brain` may be omitted on single-brain ops; the profile's pinned brain is used. When in doubt, pass `--brain` explicitly.
+
+Manage brains within a profile's org:
 ```bash
-aju brains list                           # show all accessible brains
-aju brains switch <name>                  # change the default brain for this CLI
-aju brains create <name>                  # create a new brain (owner: current user)
+aju brains list --profile <name>                  # show brains reachable with this profile
+aju brains create <new-name> --profile <name>     # create a brain in this profile's org
 ```
 
-Without `--brain`, commands target the currently active brain. `aju status` shows which one.
+`aju brains switch` is retired — to use a different brain, pass `--brain` on the call or use a different `--profile`.
 
 ## Recent changes
 
 ```bash
-aju changes                               # default: last 24h of mutations
-aju changes --since 2026-04-01T00:00:00Z  # explicit cutoff (ISO 8601)
-aju rebuild-links                         # re-parse wikilinks + rebuild edge table
+aju changes --profile <name>                                 # default: last 24h of mutations
+aju changes --since 2026-04-01T00:00:00Z --profile <name>    # explicit cutoff (ISO 8601)
+aju rebuild-links --profile <name>                           # re-parse wikilinks + rebuild edge table
 ```
 
 Useful when the user asks "what did I add yesterday?" or "what's new since Monday?".
@@ -240,36 +248,38 @@ Useful when the user asks "what did I add yesterday?" or "what's new since Monda
 ## Export
 
 ```bash
-aju export -o my-export.json              # full portable JSON of the user's data
+aju export -o my-export.json --profile <name>     # full portable JSON of one profile's data
 ```
 
 Always available, even after the beta ends. Useful when the user wants a local copy of everything.
 
 ## Common workflows
 
+In every workflow below, pick the profile that matches the user's intent (see the routing table above). Substitute the actual profile name for `<name>`.
+
 ### "What do we know about X?"
 ```bash
 # Run these two in parallel in one tool call:
-aju search "X"
-aju semantic "X"
+aju search "X" --profile <name>
+aju semantic "X" --profile <name>
 # Then:
-aju read <top_path>                       # read the best match
-aju related <top_path>                    # adjacent context
+aju read <top_path> --profile <name>           # read the best match
+aju related <top_path> --profile <name>        # adjacent context
 ```
 
 ### "Add this to my research brain: <paper / finding / idea>"
 ```bash
 # 1. Check the research brain first
-aju search "<topic>" --brain research
-aju semantic "<natural phrasing>" --brain research
+aju search "<topic>" --brain research --profile <name>
+aju semantic "<natural phrasing>" --brain research --profile <name>
 
 # 2a. If an existing note fits: read → compose → update
-aju read topics/<slug>.md --brain research
+aju read topics/<slug>.md --brain research --profile <name>
 # ...append new section with date + wikilinks...
-aju update topics/<slug>.md --brain research
+aju update topics/<slug>.md --brain research --profile <name>
 
 # 2b. If nothing fits: create a stable-path note
-cat <<'EOF' | aju create topics/<slug>.md --brain research
+cat <<'EOF' | aju create topics/<slug>.md --brain research --profile <name>
 ---
 tags: [research, <domain>]
 source: claude-code
@@ -279,56 +289,56 @@ source: claude-code
 <Content with [[wikilinks]] to existing notes>
 EOF
 ```
-Target the brain that matches the user's intent — research findings go in `research`, personal thoughts in `Personal`, team decisions in a team org brain.
+Target the brain that matches the user's intent — research findings go in `research`, personal thoughts in a personal brain, team decisions in a team org brain. The profile decides the org; `--brain` decides the brain within that org.
 
 ### "What's the whole picture around X?" (multi-hop / synthesis)
 ```bash
-aju deep-search "<full question>"         # returns seeds + graph neighbors in one call
+aju deep-search "<full question>" --profile <name>     # returns seeds + graph neighbors in one call
 # results tagged S (seed) or G1/G2 (graph hop distance); read the top few and synthesize
 ```
 
 ### "Remember this: <decision or fact>"
 
-1. Search first: `aju search "<topic>"` and `aju semantic "<natural phrasing>"`
-2. If an existing doc fits: `aju read <path>` → compose updated content → `aju update <path>`
-3. If no doc fits: choose a stable path (`topics/<slug>.md` or `decisions/<slug>.md`) → `aju create <path>` with frontmatter, body, and wikilinks to related docs
+1. Search first: `aju search "<topic>" --profile <name>` and `aju semantic "<natural phrasing>" --profile <name>`
+2. If an existing doc fits: `aju read <path> --profile <name>` → compose updated content → `aju update <path> --profile <name>`
+3. If no doc fits: choose a stable path (`topics/<slug>.md` or `decisions/<slug>.md`) → `aju create <path> --profile <name>` with frontmatter, body, and wikilinks to related docs
 
 ### "What did I decide about X?"
 ```bash
-aju search "X"
-aju browse decisions/                     # if the user uses a decisions/ convention
-aju semantic "why did I choose X"
+aju search "X" --profile <name>
+aju browse decisions/ --profile <name>                  # if the user uses a decisions/ convention
+aju semantic "why did I choose X" --profile <name>
 ```
 
 ### "Show me yesterday's notes"
 ```bash
-aju browse journal/
-aju read journal/2026-04-16.md
+aju browse journal/ --profile <name>
+aju read journal/2026-04-16.md --profile <name>
 ```
 
 ### "Continue our conversation about X"
 ```bash
-aju search "X"
-aju read <path>                           # pull the last thread
+aju search "X" --profile <name>
+aju read <path> --profile <name>           # pull the last thread
 # … continue the conversation …
-aju update <path>                         # append the new turn, with wikilinks
+aju update <path> --profile <name>         # append the new turn, with wikilinks
 ```
 
 ### "How did this document come to exist?"
 ```bash
-aju changes --since 2026-01-01T00:00:00Z  # see when paths were created or modified
-aju backlinks <path>                      # what else points here
+aju changes --since 2026-01-01T00:00:00Z --profile <name>  # see when paths were created or modified
+aju backlinks <path> --profile <name>                      # what else points here
 ```
 
 ## Admin commands (rarely needed by agents)
 
-These exist but most agent tasks should NOT use them without explicit user request:
+These exist but most agent tasks should NOT use them without explicit user request. They also require `--profile`:
 
-- `aju orgs list|switch|create|invite|members` — organization management
-- `aju agents list|create|show|pause|resume|revoke|grant|activity` — agent principals
-- `aju keys list|create|revoke` — API keys (creating a new key returns a plaintext that's only shown once)
-- `aju files upload` (for large uploads, consider user confirmation)
-- `aju mcp serve` — MCP server (the CLI is the primary interface; MCP is for other hosts)
+- `aju orgs list|create|invite|members --profile <name>` — organization management (no `switch` — retired)
+- `aju agents list|create|show|pause|resume|revoke|grant|activity --profile <name>` — agent principals
+- `aju keys list|create|revoke --profile <name>` — API keys (creating a new key returns a plaintext that's only shown once)
+- `aju files upload --profile <name>` (for large uploads, consider user confirmation)
+- `aju mcp serve --profile <name>` — MCP server (the CLI is the primary interface; MCP is for other hosts)
 
 Treat these as user actions.
 
@@ -336,32 +346,38 @@ Treat these as user actions.
 
 ```bash
 aju version
-aju status                                # server, active brain, signed-in identity
-aju whoami                                # email only
-aju doctor                                # full environment + connectivity check
+aju status --profile <name>               # server, signed-in identity for one profile
+aju whoami --profile <name>               # email only
+aju doctor --profile <name>               # full environment + connectivity check
+aju profiles list                         # inventory all profiles (no --profile needed)
 aju help                                  # command overview
 aju help <command>                        # per-command usage
 aju self-update                           # update the CLI binary to latest release
-aju news                                  # product announcements
+aju news --profile <name>                 # product announcements
 ```
+
+The only commands that work without `--profile` are `aju login`, `aju logout`, `aju profiles {list,show,use,remove}`, `aju version`, and `aju help`.
 
 ## Do
 
-- After the user confirms a fact you saved, run `aju validate <path>` so future retrieval treats it as canonical.
+- Pass `--profile <name>` on every brain-touching call. The CLI will refuse without it. Pick the profile from the routing table above.
+- After the user confirms a fact you saved, run `aju validate <path> --profile <name>` so future retrieval treats it as canonical.
 - When a search result you're about to cite has `validation.status: stale` or `unvalidated + provenance: agent`, surface that uncertainty in your answer — don't quietly downgrade.
 
 ## Do NOT
 
+- Run `aju` brain-touching commands without `--profile`. They will fail; this is by design (silent defaults were the source of cross-org leaks).
+- Run `aju orgs switch` or `aju brains switch` — both are retired and now print a refusal.
+- Pick a profile by guessing when the user's phrasing is ambiguous ("my brain", "our notes" without an org clue). Ask first.
 - Dump raw conversation transcripts wholesale. Summarise, reference, link.
 - Create duplicate documents when an existing one fits. `update` the existing one.
 - Use throwaway paths like `tmp/<random>.md` — memory should be findable later.
 - Create brains, API keys, or organizations unprompted. Those are user actions.
 - Skip the search-before-write step. Never write a doc without first running `aju search` (and ideally `aju semantic` in parallel).
 - Write secrets (API keys, passwords, tokens) into the brain. It is a note store, not a password manager.
-- Overwrite an existing document without first reading its current content (`aju read`, compose locally, then `aju update`).
+- Overwrite an existing document without first reading its current content (`aju read --profile <name>`, compose locally, then `aju update --profile <name>`).
 - Delete documents without explicit user permission.
 - Write personal notes into an org brain or team notes into a personal brain. If the right target is ambiguous, ask.
-- Run `aju orgs switch` or `aju brains switch` to satisfy your own retrieval needs — both mutate persisted state and race with parallel shells. Use `--profile <name>` and `--brain <name>` per call instead. Only run the persisted-switch commands when the user explicitly asks to change their default.
 
 ## Output conventions
 
@@ -377,4 +393,4 @@ Brains and organizations have three role levels. When a user asks "can I edit th
 | **editor** | Read, write, delete documents |
 | **viewer** | Read only |
 
-Use `aju status` to see the current user's role in their active brain. Use `aju brains list` to see roles across all accessible brains. Use `aju orgs list` for org-level roles.
+Use `aju status --profile <name>` to see the signed-in identity for that profile. Use `aju brains list --profile <name>` to see roles across the brains reachable with that profile. Use `aju orgs list --profile <name>` for org-level roles.

@@ -27,15 +27,48 @@ var CurrentVersion = "dev"
 
 // loadAuthedClient returns a Client signed with the active API key plus the
 // loaded Config. It returns a friendly error when no API key is configured.
+//
+// Strict-profile model: callers MUST explicitly select a profile via the
+// `--profile <name>` flag (stripped by main.extractProfileFlag into AJU_PROFILE)
+// or by setting AJU_PROFILE directly. Falling back to a "default" profile is
+// refused, because silent defaults are how cross-org writes leak — there is
+// no UI surface that tells the caller which org their next request will hit.
+//
+// Auth-bootstrapping commands (login, logout, profiles list/use/show/remove,
+// version, help) skip this guard by talking to config.Load() directly rather
+// than going through loadAuthedClient.
 func loadAuthedClient() (*httpx.Client, *config.Config, error) {
+	if err := requireExplicitProfile(); err != nil {
+		return nil, nil, err
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, nil, err
 	}
+	if _, ok := cfg.Profiles[cfg.Active]; !ok {
+		names := strings.Join(cfg.ProfileNames(), ", ")
+		if names == "" {
+			return nil, cfg, fmt.Errorf("no profile named %q — run `aju login --profile %s` to create one", cfg.Active, cfg.Active)
+		}
+		return nil, cfg, fmt.Errorf("no profile named %q (have: %s)", cfg.Active, names)
+	}
 	if cfg.Profile().Key == "" {
-		return nil, cfg, errors.New("Not signed in — run `aju login`")
+		return nil, cfg, fmt.Errorf("profile %q is not signed in — run `aju login --profile %s`", cfg.Active, cfg.Active)
 	}
 	return httpx.New(cfg.ServerURL(), cfg.Profile().Key), cfg, nil
+}
+
+// requireExplicitProfile errors when the caller did not name a profile via
+// `--profile`/`AJU_PROFILE`. Every brain-touching call has to pick its
+// profile explicitly so cross-org writes are impossible by accident.
+func requireExplicitProfile() error {
+	if strings.TrimSpace(os.Getenv("AJU_PROFILE")) != "" {
+		return nil
+	}
+	return errors.New(
+		"--profile required — pass `--profile <name>` or set AJU_PROFILE=<name>.\n" +
+			"List your profiles with `aju profiles list`. Each profile pins one (server, key, brain),\n" +
+			"so naming the profile names the org and brain too. There is no `aju orgs switch` anymore.")
 }
 
 // resolveBrainFlag returns the brain name to send with the next API call.

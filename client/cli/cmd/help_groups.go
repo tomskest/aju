@@ -104,29 +104,28 @@ func HelpOrgs() {
 	fmt.Print(`aju orgs — manage organizations and membership
 
 Usage:
-  aju orgs <subcommand> [flags]
+  aju orgs <subcommand> --profile <name> [flags]
 
 Subcommands:
-  list                   List organizations (active marked with *, local-key binding shown in last column)
-  switch <slug>          Switch the server's active-org cookie. Bearer-token CLI
-                         calls follow the key's pinned org, not this cookie, so
-                         you may also need a profile switch — the command will
-                         tell you.
-  create <name>          Create an org and auto-switch into it
-  invite <email>         Invite a user to the active org
+  list                   List organizations the profile's key can reach
+                         (local-key binding shown in last column)
+  create <name>          Create an org. Does not auto-switch — there is
+                         no "active org" anymore; pass --profile per call.
+  invite <email>         Invite a user to the profile's org
                            --role member|admin|owner    (default: member)
-  members                List members of the active organization
+  members                List members of the profile's organization
+
+  switch <slug>          RETIRED. Refuses to run. The CLI no longer carries
+                         an active org — pass --profile <name> on every call.
 
 Examples:
-  aju orgs list
-  aju orgs switch acme
-  aju orgs invite alex@example.com --role admin
-  aju orgs members
+  aju orgs list --profile acme
+  aju orgs invite alex@example.com --role admin --profile acme
+  aju orgs members --profile acme
 
 Related:
-  aju keys update        mint a local key for every org you've joined
-  aju profiles use <n>   flip the active profile (and therefore which org
-                         your CLI calls resolve against)
+  aju keys update --profile <name>   mint a local key for every org you've joined
+  aju profiles list                  inventory configured profiles
 `)
 }
 
@@ -165,34 +164,36 @@ func HelpBrains() {
 	fmt.Print(`aju brains — manage brains (per-tenant memory spaces)
 
 Usage:
-  aju brains <subcommand> [flags]
+  aju brains <subcommand> --profile <name> [flags]
 
 Subcommands:
-  list                       List brains accessible to the active profile
-                             (active brain marked with *)
-  create <name>              Create a brain in the active org
+  list                       List brains reachable with --profile
+                             (profile-pinned brain marked with *)
+  create <name>              Create a brain in the profile's org
                                --type personal|org   (default: personal)
   delete <name>              Delete a brain. Refuses to delete your only owned brain.
                                --yes                 skip confirmation prompt
-  switch <name>              Switch the active brain (writes ~/.aju/config.json)
   share <name> <email>       Grant a user access to a brain. Owner-only.
                                --role viewer|editor|owner (default: editor)
   unshare <name> <email>     Revoke a user's access. Owner-only. Refuses last owner.
   members <name>             List explicit user grants on a brain.
 
+  switch <name>              RETIRED. Refuses to run. There is no shared
+                             "active brain" anymore — each profile pins its
+                             own; use --profile or --brain per call.
+
 Examples:
-  aju brains list
-  aju brains create "Personal"
-  aju brains create "Acme" --type org
-  aju brains switch Personal
-  aju brains delete "stale-brain" --yes
-  aju brains share "research" lead@example.com --role owner
-  aju brains members "research"
-  aju brains unshare "research" lead@example.com
+  aju brains list --profile acme
+  aju brains create "Personal" --profile acme
+  aju brains create "Team" --type org --profile acme
+  aju brains delete "stale-brain" --yes --profile acme
+  aju brains share "research" lead@example.com --role owner --profile acme
+  aju brains members "research" --profile acme
+  aju brains unshare "research" lead@example.com --profile acme
 
 Global flag:
   --brain <name>         target a specific brain for one call (overrides the
-                         active brain stored locally)
+                         brain pinned to --profile)
 `)
 }
 

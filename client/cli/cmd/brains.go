@@ -9,7 +9,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/tomskest/aju/client/cli/internal/config"
 	"github.com/tomskest/aju/client/cli/internal/httpx"
 )
 
@@ -189,37 +188,28 @@ func BrainsDelete(args []string) error {
 	return nil
 }
 
-// BrainsSwitch updates config.Brain. No server call — the server resolves the
-// brain on each request from the ?brain=<name> query parameter.
+// BrainsSwitch is intentionally retired. There is no "active brain" anymore —
+// each profile pins its own brain at login time, and every brain-touching
+// call selects its profile via `--profile <name>`. Callers that want to use
+// a different brain create or re-login a separate profile.
 func BrainsSwitch(args []string) error {
 	if anyHelpArg(args) {
-		fmt.Print(`Switch the active brain for the current profile. Purely local — writes
-~/.aju/config.json. The server resolves the brain on each request from the
-?brain=<name> query parameter.
+		fmt.Print(`'aju brains switch' is retired. There is no shared "active brain" anymore.
 
-Usage:
-  aju brains switch <name>
+Each profile in ~/.aju/config.json pins its own brain. To target a brain on
+a single call, pass --profile <name> (or AJU_PROFILE=<name>). To rebind a
+profile to a different brain, re-run 'aju login --profile <name>' and pick
+the brain during the device flow, or edit ~/.aju/config.json by hand.
 
-Examples:
-  aju brains switch Personal
-  aju brains switch Acme
+  aju profiles list                        # what's configured
+  aju --profile work search "..."          # explicit per-call routing
 `)
 		return nil
 	}
-	if len(args) < 1 {
-		return errors.New("usage: aju brains switch <name>")
-	}
-	name := args[0]
-	cfg, err := config.Load()
-	if err != nil {
-		return err
-	}
-	cfg.Profile().Brain = name
-	if err := config.Save(cfg); err != nil {
-		return err
-	}
-	fmt.Printf("Switched active brain to %s\n", name)
-	return nil
+	return errors.New(
+		"'aju brains switch' is retired — there is no shared active brain.\n" +
+			"Pass --profile <name> on every call (each profile pins its own brain).\n" +
+			"List your profiles with `aju profiles list`.")
 }
 
 // findBrainIDByName does a linear scan — brain lists are short, so a map is

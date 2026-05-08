@@ -26,11 +26,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Peel off a top-level `--profile <name>` / `-p <name>` before dispatch.
-	// Setting AJU_PROFILE this way means downstream `config.Load()` calls
-	// pick the right profile without every subcommand having to know the
-	// flag exists. Scans only the leading args so `aju search "-p"` still
-	// passes `-p` through to the search command.
+	// Peel off `--profile <name>` / `-p <name>` from anywhere on the command
+	// line before dispatch. Setting AJU_PROFILE this way means downstream
+	// `config.Load()` calls pick the right profile without every subcommand
+	// having to know the flag exists. Scans intermixed-style so both
+	// `aju --profile work search ...` and `aju search ... --profile work`
+	// work the same. Anything after a `--` end-of-flags sentinel is passed
+	// through verbatim so users can hand a literal "--profile" string to a
+	// subcommand if they ever need to.
 	args := extractProfileFlag(os.Args[1:])
 	if len(args) < 1 {
 		cmd.Help()
@@ -281,22 +284,31 @@ func exitWith(err error) {
 	os.Exit(1)
 }
 
-// extractProfileFlag scans the leading args for `-p <name>` or
-// `--profile <name>` (also `--profile=<name>` / `-p=<name>`), removes them
-// from the returned slice, and exports AJU_PROFILE so config.Load picks the
-// right profile. Returns the remaining args for normal dispatch.
+// extractProfileFlag scans every arg for `-p <name>` / `--profile <name>`
+// (also `--profile=<name>` / `-p=<name>`), removes them from the returned
+// slice, and exports AJU_PROFILE so config.Load picks the right profile.
+// Returns the remaining args for normal dispatch.
 //
-// Only leading flags are considered — once we hit a non-flag token (the
-// command name), scanning stops. This preserves the ability to pass `-p`
-// as a real argument to downstream subcommands.
+// Both pre-command (`aju --profile foo bar`) and post-command
+// (`aju bar --profile foo`) positions are accepted — the flag is global
+// in spirit even though it's stripped before any subcommand FlagSet runs.
+//
+// A POSIX `--` sentinel ends scanning: every token after it passes through
+// verbatim, so users can still hand a literal "--profile" string to a
+// subcommand if needed.
 func extractProfileFlag(in []string) []string {
 	out := make([]string, 0, len(in))
 	i := 0
 	for i < len(in) {
 		a := in[i]
-		if !isLeadingProfileFlag(a) {
+		if a == "--" {
 			out = append(out, in[i:]...)
 			return out
+		}
+		if !isProfileFlag(a) {
+			out = append(out, a)
+			i++
+			continue
 		}
 		// Forms: `--profile=foo`, `-p=foo` (single token) vs `--profile foo`
 		if eq := indexOf(a, '='); eq > 0 {
@@ -314,7 +326,7 @@ func extractProfileFlag(in []string) []string {
 	return out
 }
 
-func isLeadingProfileFlag(a string) bool {
+func isProfileFlag(a string) bool {
 	return a == "-p" || a == "--profile" ||
 		hasPrefix(a, "-p=") || hasPrefix(a, "--profile=")
 }

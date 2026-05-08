@@ -232,96 +232,31 @@ func resolveProfileBindings(
 	return out, nil
 }
 
-// OrgsSwitch flips the server's active-org cookie to the one matching <slug>.
-// For bearer-token callers (the CLI) that cookie is ignored on subsequent
-// requests — the API key's server-side binding wins instead. So after the
-// server call we verify that the current profile's key actually binds to the
-// target org; if not, we warn and refuse to update the display-only local
-// pin (which would otherwise lie to `aju orgs list` and friends).
+// OrgsSwitch is intentionally retired. The CLI no longer carries an "active
+// org" — every brain-touching call must name its profile explicitly via
+// `--profile <name>` (or AJU_PROFILE=<name>), and a profile bundles
+// (server, key, org-by-virtue-of-key, brain). Switching once and then doing
+// silent ops was the source of cross-org writes, so we refuse the command
+// outright and point at the profile-per-call workflow instead.
 func OrgsSwitch(args []string) error {
-	fs := flag.NewFlagSet("orgs switch", flag.ContinueOnError)
-	setLeafUsage(fs, leafHelp{
-		Summary: "Switch the server's active-org cookie. Affects web UI; CLI still follows the key.",
-		Usage:   "aju orgs switch <slug>",
-		Long: `Bearer-token CLI calls resolve against the key's pinned org, not the
-server cookie. If the current profile's key doesn't bind to <slug>, the
-command warns and points you at the right profile or 'aju keys update'.`,
-		Examples: []string{
-			"aju orgs switch acme",
-		},
-	})
-	if err := parseFlags(fs, args); err != nil {
-		return err
-	}
-	if fs.NArg() < 1 {
-		return errors.New("usage: aju orgs switch <slug>")
-	}
-	slug := fs.Arg(0)
+	if anyHelpArg(args) {
+		fmt.Print(`'aju orgs switch' is retired. The CLI no longer carries an "active org".
 
-	client, cfg, err := loadAuthedClient()
-	if err != nil {
-		return err
-	}
+Use --profile <name> (or AJU_PROFILE=<name>) on every call instead.
 
-	var list orgsListResp
-	if err := client.Get("/api/orgs", &list); err != nil {
-		return printFriendlyErr(err)
-	}
-	id := findOrgIDBySlug(list.Orgs, slug)
-	if id == "" {
-		return fmt.Errorf("no organization with slug %q", slug)
-	}
+Each profile pins one (server, key, brain). Naming the profile names the
+org too — there is no separate org-switch step.
 
-	var resp orgsSwitchResp
-	if err := client.Post("/api/orgs/"+id+"/switch", map[string]any{}, &resp); err != nil {
-		return printFriendlyErr(err)
-	}
-
-	// Figure out whether the *current profile's key* actually binds into
-	// the target org. Three outcomes:
-	//   - active profile binds → just record the slug locally, done.
-	//   - another local profile binds → auto-switch to that profile so the
-	//     CLI's bearer key matches the slug. This makes `aju orgs switch`
-	//     behave the way users expect after `aju login` provisioned one
-	//     profile per org.
-	//   - no local profile binds → keep current profile, warn, point at
-	//     `aju keys update` to mint a key for this org.
-	bindings, err := resolveProfileBindings(client, cfg, &list)
-	if err != nil {
-		return printFriendlyErr(err)
-	}
-	activeProfile := cfg.Active
-	boundProfile, hasBinding := bindings[slug]
-
-	if hasBinding && boundProfile == activeProfile {
-		cfg.Profile().Org = slug
-		if err := config.Save(cfg); err != nil {
-			return err
-		}
-		fmt.Printf("Switched to %s\n", slug)
+  aju profiles list                        # see configured profiles
+  aju --profile work search "..."          # explicit per-call routing
+  AJU_PROFILE=work aju search "..."        # equivalent via env
+`)
 		return nil
 	}
-
-	if hasBinding {
-		// Auto-switch to the profile whose key binds to <slug>. The active
-		// profile becomes the one that can actually reach the new org.
-		cfg.SetActive(boundProfile)
-		cfg.Profile().Org = slug
-		cfg.DefaultProfile = boundProfile
-		if err := config.Save(cfg); err != nil {
-			return err
-		}
-		fmt.Printf("Switched to %s (profile: %s)\n", slug, boundProfile)
-		return nil
-	}
-
-	fmt.Printf("Server session switched to %s (affects web UI only).\n", slug)
-	fmt.Fprintln(os.Stderr,
-		"\nYour current CLI key is not bound to this org, so `aju <vault-op>` calls will still resolve to the key's original org.")
-	fmt.Fprintf(os.Stderr,
-		"No local profile has a key for %s. Mint one with:\n  aju keys update\n",
-		slug)
-	return nil
+	return errors.New(
+		"'aju orgs switch' is retired — the CLI no longer carries an active org.\n" +
+			"Pass --profile <name> on every call (or set AJU_PROFILE=<name>).\n" +
+			"List your profiles with `aju profiles list`.")
 }
 
 // OrgsCreate provisions a new org and auto-switches into it.
