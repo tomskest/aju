@@ -13,6 +13,7 @@ import { encryptDsn } from "@/lib/tenant";
 import { recordAudit, clientIp } from "@/lib/audit";
 import { logger as baseLogger } from "@/lib/logger";
 import { slackIntegrationEnabled } from "@/lib/agent/flags";
+import { findTeamConflict } from "@/lib/agent/install";
 import { oauthV2Access, verifyOAuthState } from "@/lib/agent/slack";
 
 const log = baseLogger.child({ area: "slack-oauth" });
@@ -58,6 +59,20 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       code,
       redirectUri: `${appUrl}/api/integrations/slack/oauth/callback`,
     });
+
+    // One Slack workspace ↔ one aju org (see src/lib/agent/install.ts).
+    const conflict = await findTeamConflict(result.teamId, orgId);
+    if (conflict) {
+      log.warn(
+        {
+          team_id: result.teamId,
+          organization_id: orgId,
+          bound_to_organization_id: conflict.organizationId,
+        },
+        "install rejected — workspace already bound to another org",
+      );
+      return NextResponse.redirect(settingsUrl(orgId, "team-conflict"));
+    }
 
     const installation = await prisma.slackInstallation.upsert({
       where: {

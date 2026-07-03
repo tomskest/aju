@@ -41,6 +41,10 @@ const INSTALL_MESSAGES: Record<string, { kind: "ok" | "error"; text: string }> =
     kind: "error",
     text: "Install failed — check the server logs and Slack app credentials.",
   },
+  "team-conflict": {
+    kind: "error",
+    text: "That Slack workspace is already connected to a different aju organization. Disconnect it there first.",
+  },
 };
 
 async function assertAdmin(orgId: string): Promise<{ userId: string; role: OrgRole }> {
