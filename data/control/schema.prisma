@@ -264,6 +264,8 @@ model Organization {
   personalOfUser User?                    @relation("UserPersonalOrg")
   tenant         Tenant?
   auditEvents    AuditEvent[]              @relation("OrgAuditEvents")
+  slackInstallations    SlackInstallation[]
+  integrationSpendLimit IntegrationSpendLimit?
 
   @@index([ownerUserId])
   @@index([isPersonal])
@@ -437,4 +439,109 @@ model AuditEvent {
   @@index([eventType, createdAt(sort: Desc)])
   @@index([resourceType, resourceId])
   @@map("audit_event")
+}
+
+// ---------- Slack integration (aju Tag) ----------
+//
+// Everything below is strictly additive and gated at runtime by
+// INTEGRATION_SLACK_ENABLED. Tenant-side principals (Agent, Brain) are
+// referenced as opaque string ids — they live in per-org tenant DBs, so no
+// FK is possible; bindings are validated against the tenant DB at bind time
+// and re-checked before every run.
+
+model SlackInstallation {
+  id                String   @id @default(cuid())
+  organizationId    String   @map("organization_id")
+  teamId            String   @map("team_id") // Slack workspace id (T...)
+  teamName          String   @map("team_name")
+  botUserId         String   @map("bot_user_id")
+  /// Bot token AES-GCM encrypted at rest — same `v1:` envelope as tenant
+  /// DSNs (src/lib/tenant/crypto.ts). Never store or log the plaintext.
+  botTokenEnc       String   @map("bot_token_enc")
+  scopes            String
+  installedByUserId String   @map("installed_by_user_id")
+  status            String   @default("active") // active | revoked
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  organization Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  bindings     SlackChannelBinding[]
+
+  @@unique([organizationId, teamId])
+  @@index([teamId])
+  @@map("slack_installation")
+}
+
+model SlackChannelBinding {
+  id             String   @id @default(cuid())
+  installationId String   @map("installation_id")
+  channelId      String   @map("channel_id")
+  channelName    String   @map("channel_name")
+  /// Tenant-side agent this channel acts as (the channel's "identity").
+  agentId        String   @map("agent_id")
+  agentName      String   @map("agent_name")
+  /// Primary brain — the only brain the agent writes captures to. Reads
+  /// span all of the agent's BrainAccess grants (RLS enforces).
+  brainId        String   @map("brain_id")
+  brainName      String   @map("brain_name")
+  mode           String   @default("mention") // mention | ambient (phase 2)
+  /// Optional per-binding tool allowlist that can only NARROW the default
+  /// tool set (e.g. ["search","semantic_search","read"] for read-only).
+  toolPolicy     Json?    @map("tool_policy")
+  status         String   @default("active") // active | paused
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  installation SlackInstallation @relation(fields: [installationId], references: [id], onDelete: Cascade)
+
+  @@unique([installationId, channelId])
+  @@map("slack_channel_binding")
+}
+
+/// One row per agent invocation ("who tagged, what ran, what it cost").
+/// Doubles as the Events API dedupe ledger via the unique slackEventId.
+/// Deliberately FK-free (audit-style): rows must survive deletion of the
+/// installation/binding they reference.
+model AgentRun {
+  id                     String    @id @default(cuid())
+  organizationId         String    @map("organization_id")
+  installationId         String    @map("installation_id")
+  bindingId              String    @map("binding_id")
+  channelId              String    @map("channel_id")
+  threadTs               String?   @map("thread_ts")
+  slackEventId           String    @unique @map("slack_event_id")
+  requestedBySlackUserId String    @map("requested_by_slack_user_id")
+  agentId                String    @map("agent_id")
+  status                 String    @default("queued") // queued | running | done | failed | refused
+  model                  String?
+  inputTokens            Int       @default(0) @map("input_tokens")
+  outputTokens           Int       @default(0) @map("output_tokens")
+  costCents              Int       @default(0) @map("cost_cents")
+  /// Compact per-tool trace: [{ tool, brain, path?, ms }]
+  toolCalls              Json?     @map("tool_calls")
+  error                  String?
+  /// ts of the reply we posted — reply idempotency across job retries.
+  replyTs                String?   @map("reply_ts")
+  startedAt              DateTime? @map("started_at")
+  finishedAt             DateTime? @map("finished_at")
+  createdAt              DateTime  @default(now()) @map("created_at")
+
+  @@index([organizationId, createdAt(sort: Desc)])
+  @@index([bindingId, createdAt(sort: Desc)])
+  @@map("agent_run")
+}
+
+model IntegrationSpendLimit {
+  id               String   @id @default(cuid())
+  organizationId   String   @unique @map("organization_id")
+  /// Monthly cap on agent-run cost, in cents. Conservative default.
+  monthlyCostCents Int      @default(2000) @map("monthly_cost_cents")
+  /// true = refuse runs once over cap; false = warn-only (still logged).
+  hardStop         Boolean  @default(true) @map("hard_stop")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("integration_spend_limit")
 }

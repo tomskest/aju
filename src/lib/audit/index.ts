@@ -59,7 +59,13 @@ export type AuditEventType =
   | "invitation.canceled"
   // Domain claims
   | "domain.claimed"
-  | "domain.removed";
+  | "domain.removed"
+  // Slack integration (aju Tag)
+  | "slack.installed"
+  | "slack.uninstalled"
+  | "slack.binding_created"
+  | "slack.binding_updated"
+  | "slack.spend_limit_updated";
 
 export type AuditPayload = {
   eventType: AuditEventType;

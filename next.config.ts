@@ -6,7 +6,7 @@ const nextConfig: NextConfig = {
   // `.next/standalone` output on Railway — without this, runtime deps can be
   // silently omitted.
   outputFileTracingRoot: import.meta.dirname,
-  serverExternalPackages: ["pg", "pdf-parse"],
+  serverExternalPackages: ["pg", "pdf-parse", "graphile-worker"],
   async rewrites() {
     return [
       // OAuth 2.0 Authorization Server Metadata (RFC 8414)
