@@ -90,11 +90,15 @@ Minimal working skeleton to copy:
 </bpmn:definitions>
 ```
 
-Layout conventions that read well: events are 36×36, tasks 100×80,
-gateways 50×50; flow left-to-right on a shared horizontal centerline;
-leave ~50px gaps between shapes. For processes beyond ~20 elements,
-model in a dedicated BPMN tool and paste the exported XML into the
-fence.
+Layout conventions that read well: events are 36×36, gateways 50×50;
+flow left-to-right on a shared horizontal centerline; leave ~50px gaps
+between shapes. **Size each task to its name**: keep the label to two
+lines, and make the box wide enough that each line fits — roughly 6px
+per character plus 20px padding (e.g. a 28-character line needs a
+~190px-wide box). Long names in a default 100×80 box wrap into the
+task's top-left type icon and look broken. For processes beyond ~20
+elements, model in a dedicated BPMN tool and paste the exported XML
+into the fence.
 
 BPMN figures carry a "powered by bpmn.io" attribution link — a
 requirement of the bpmn-js license.

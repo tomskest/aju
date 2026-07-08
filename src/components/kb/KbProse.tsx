@@ -29,8 +29,7 @@ async function loadMermaid(): Promise<typeof import("mermaid").default> {
         startOnLoad: false,
         securityLevel: "strict",
         theme: "base",
-        fontFamily:
-          'var(--font-mono), ui-monospace, "SF Mono", Menlo, monospace',
+        fontFamily: 'var(--font-mono), ui-monospace, "SF Mono", Menlo, monospace',
         themeVariables: {
           background: "transparent",
           mainBkg: "rgba(34, 197, 94, 0.10)",
@@ -112,17 +111,11 @@ async function loadMermaid(): Promise<typeof import("mermaid").default> {
   return mermaidLoadPromise;
 }
 
-let bpmnViewerLoadPromise: Promise<
-  typeof import("bpmn-js/lib/Viewer").default
-> | null = null;
+let bpmnViewerLoadPromise: Promise<typeof import("bpmn-js/lib/Viewer").default> | null = null;
 
-async function loadBpmnViewer(): Promise<
-  typeof import("bpmn-js/lib/Viewer").default
-> {
+async function loadBpmnViewer(): Promise<typeof import("bpmn-js/lib/Viewer").default> {
   if (!bpmnViewerLoadPromise) {
-    bpmnViewerLoadPromise = import("bpmn-js/lib/Viewer").then(
-      (mod) => mod.default,
-    );
+    bpmnViewerLoadPromise = import("bpmn-js/lib/Viewer").then((mod) => mod.default);
   }
   return bpmnViewerLoadPromise;
 }
@@ -217,13 +210,9 @@ function fillIsLight(el: Element): boolean | null {
 }
 
 function fixSvgContrast(svg: SVGElement) {
-  const groups = svg.querySelectorAll<SVGGElement>(
-    "g.node, g.cluster, g.actor, g.task, g.section",
-  );
+  const groups = svg.querySelectorAll<SVGGElement>("g.node, g.cluster, g.actor, g.task, g.section");
   groups.forEach((g) => {
-    const shape = g.querySelector(
-      "rect, polygon, circle, ellipse, path",
-    ) as Element | null;
+    const shape = g.querySelector("rect, polygon, circle, ellipse, path") as Element | null;
     if (!shape) return;
     const light = fillIsLight(shape);
     if (light !== true) return;
@@ -233,11 +222,11 @@ function fixSvgContrast(svg: SVGElement) {
       t.setAttribute("fill", dark);
       t.style.fill = dark;
     });
-    g.querySelectorAll<HTMLElement>(
-      "foreignObject *, .nodeLabel, .label, .edgeLabel",
-    ).forEach((el) => {
-      el.style.color = dark;
-    });
+    g.querySelectorAll<HTMLElement>("foreignObject *, .nodeLabel, .label, .edgeLabel").forEach(
+      (el) => {
+        el.style.color = dark;
+      },
+    );
   });
 }
 
@@ -286,28 +275,44 @@ function openMermaidFullscreen(sourceSvg: SVGElement) {
   const prevBodyOverflow = document.body.style.overflow;
   document.body.style.overflow = "hidden";
 
+  // Zoom is applied by resizing the SVG itself — a real vector re-render
+  // that stays crisp at any scale. Transform-scaling the stage instead
+  // makes browsers blow up a bitmap cached at scale 1, which is blurry.
+  // The stage transform is translate-only (pan).
+  const vb = clonedSvg
+    .getAttribute("viewBox")
+    ?.split(/[\s,]+/)
+    .map(Number);
+  let baseW = vb && vb.length === 4 && vb[2] > 0 ? vb[2] : 0;
+  let baseH = vb && vb.length === 4 && vb[3] > 0 ? vb[3] : 0;
+  if (!baseW || !baseH) {
+    const r = clonedSvg.getBoundingClientRect();
+    baseW = r.width || 800;
+    baseH = r.height || 600;
+  }
+
   let scale = 1;
   let tx = 0;
   let ty = 0;
 
   const apply = () => {
-    stage.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+    clonedSvg.style.width = `${baseW * scale}px`;
+    clonedSvg.style.height = `${baseH * scale}px`;
+    stage.style.transform = `translate(${tx}px, ${ty}px)`;
   };
 
   const fit = () => {
-    stage.style.transform = "translate(0px, 0px) scale(1)";
-    const stageRect = stage.getBoundingClientRect();
     const canvasRect = canvas.getBoundingClientRect();
-    if (!stageRect.width || !stageRect.height) {
+    if (!canvasRect.width || !canvasRect.height) {
       apply();
       return;
     }
     const padding = 96;
-    const sx = (canvasRect.width - padding) / stageRect.width;
-    const sy = (canvasRect.height - padding) / stageRect.height;
+    const sx = (canvasRect.width - padding) / baseW;
+    const sy = (canvasRect.height - padding) / baseH;
     scale = Math.max(0.1, Math.min(sx, sy, 6));
-    tx = (canvasRect.width - stageRect.width * scale) / 2;
-    ty = (canvasRect.height - stageRect.height * scale) / 2;
+    tx = (canvasRect.width - baseW * scale) / 2;
+    ty = (canvasRect.height - baseH * scale) / 2;
     apply();
   };
 
@@ -405,12 +410,8 @@ function KbProseInner({ html, className }: Props) {
     const root = containerRef.current;
     if (!root) return;
 
-    const mermaidBlocks = Array.from(
-      root.querySelectorAll<HTMLElement>("code.language-mermaid"),
-    );
-    const bpmnBlocks = Array.from(
-      root.querySelectorAll<HTMLElement>("code.language-bpmn"),
-    );
+    const mermaidBlocks = Array.from(root.querySelectorAll<HTMLElement>("code.language-mermaid"));
+    const bpmnBlocks = Array.from(root.querySelectorAll<HTMLElement>("code.language-bpmn"));
     if (mermaidBlocks.length === 0 && bpmnBlocks.length === 0) return;
 
     let cancelled = false;
@@ -437,9 +438,7 @@ function KbProseInner({ html, className }: Props) {
           pre.dataset.mermaidEnhanced = "error";
           const note = document.createElement("div");
           note.className = "mermaid-error";
-          note.textContent = `mermaid: ${
-            err instanceof Error ? err.message : String(err)
-          }`;
+          note.textContent = `mermaid: ${err instanceof Error ? err.message : String(err)}`;
           pre.parentElement?.insertBefore(note, pre.nextSibling);
           continue;
         }
@@ -489,10 +488,13 @@ function KbProseInner({ html, className }: Props) {
         const renderedSvg = svgWrap.querySelector("svg");
         if (renderedSvg) fixSvgContrast(renderedSvg);
 
-        expandBtn.addEventListener("click", () => {
+        const openFullscreen = () => {
           const svgEl = svgWrap.querySelector("svg");
           if (svgEl) openMermaidFullscreen(svgEl);
-        });
+        };
+        expandBtn.addEventListener("click", openFullscreen);
+        svgWrap.title = "Click to expand (drag to pan, scroll to zoom)";
+        svgWrap.addEventListener("click", openFullscreen);
 
         pre.replaceWith(figure);
       }
@@ -518,9 +520,7 @@ function KbProseInner({ html, className }: Props) {
           pre.dataset.bpmnEnhanced = "error";
           const note = document.createElement("div");
           note.className = "mermaid-error";
-          note.textContent = `bpmn: ${
-            err instanceof Error ? err.message : String(err)
-          }`;
+          note.textContent = `bpmn: ${err instanceof Error ? err.message : String(err)}`;
           pre.parentElement?.insertBefore(note, pre.nextSibling);
           continue;
         }
@@ -567,10 +567,13 @@ function KbProseInner({ html, className }: Props) {
         svgWrap.innerHTML = svg;
         figure.appendChild(svgWrap);
 
-        expandBtn.addEventListener("click", () => {
+        const openFullscreen = () => {
           const svgEl = svgWrap.querySelector("svg");
           if (svgEl) openMermaidFullscreen(svgEl);
-        });
+        };
+        expandBtn.addEventListener("click", openFullscreen);
+        svgWrap.title = "Click to expand (drag to pan, scroll to zoom)";
+        svgWrap.addEventListener("click", openFullscreen);
 
         // Visible attribution is a bpmn.io license requirement for
         // rendering diagrams with bpmn-js.
@@ -607,8 +610,9 @@ function KbProseInner({ html, className }: Props) {
 // the `<pre>` mid-flight while mermaid is still rendering and leave the
 // resulting <figure> orphaned. React 19 (19.2.5) re-applies innerHTML on
 // parent re-render even when the html string is identical.
-const KbProse = memo(KbProseInner, (prev, next) =>
-  prev.html === next.html && prev.className === next.className,
+const KbProse = memo(
+  KbProseInner,
+  (prev, next) => prev.html === next.html && prev.className === next.className,
 );
 
 export default KbProse;

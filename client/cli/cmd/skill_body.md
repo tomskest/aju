@@ -163,7 +163,7 @@ EOF
 - **Wikilinks.** `[[Like This]]` creates graph edges automatically. Link to related docs instead of rewriting context. Linked docs don't have to exist yet — dangling links resolve when the target is written later.
 - **Titles short and stable.** If you rename a document heavily, backlinks can drift.
 - **One idea per file.** Split sprawling notes into topic files linked together.
-- **Diagrams.** Fenced ` ```mermaid ` and ` ```bpmn ` code blocks render as diagrams in the web app. A ` ```bpmn ` block must be complete BPMN 2.0 XML _including_ the `bpmndi:BPMNDiagram` layout section (bpmn-js does no auto-layout — every element needs a `BPMNShape`/`BPMNEdge` with coordinates). Working skeleton: `aju read` the public KB page at aju.sh/kb/data/diagrams, or copy from an existing process doc. Plain ` ```xml ` blocks are never rendered.
+- **Diagrams.** Fenced ` ```mermaid ` and ` ```bpmn ` code blocks render as diagrams in the web app. A ` ```bpmn ` block must be complete BPMN 2.0 XML _including_ the `bpmndi:BPMNDiagram` layout section (bpmn-js does no auto-layout — every element needs a `BPMNShape`/`BPMNEdge` with coordinates). Size each task box to its name: keep labels to two lines and give the box ~6px per character per line plus 20px padding, or the text collides with the task's type icon. Working skeleton: `aju read` the public KB page at aju.sh/kb/data/diagrams, or copy from an existing process doc. Plain ` ```xml ` blocks are never rendered.
 
 ### Updating existing memory
 
