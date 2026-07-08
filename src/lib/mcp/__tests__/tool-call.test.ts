@@ -168,6 +168,11 @@ describe("registerAjuTools → aju_browse", () => {
       brainAccess: {
         findFirst: vi.fn().mockResolvedValue(null),
       },
+      // Human principals fall back to an org-brain lookup after the
+      // BrainAccess miss; RLS-scoped, so an inaccessible brain yields null.
+      brain: {
+        findFirst: vi.fn().mockResolvedValue(null),
+      },
       vaultDocument: { findMany: vi.fn() },
     };
 

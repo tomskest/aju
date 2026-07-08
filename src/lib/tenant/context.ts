@@ -90,7 +90,7 @@ export async function setBrainContextOnTx(
  * Resolve the tenant client for an org and list the brain ids the given
  * user (or agent) can see. This is the read side that feeds withBrainContext.
  *
- * Human members of `orgId` get implicit viewer access to every `type: "org"`
+ * Human members of `orgId` get implicit editor access to every `type: "org"`
  * brain in the tenant, in addition to any explicit BrainAccess grants.
  * Personal brains stay private — only their owners (or anyone with an
  * explicit BrainAccess row) see them. Agent principals never get the

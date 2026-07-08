@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { currentUser, getActiveOrganizationId } from "@/lib/auth";
-import { tenantDbFor } from "@/lib/db";
+import { prisma, tenantDbFor } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -26,8 +26,27 @@ export default async function AppHome() {
     include: { brain: { select: { name: true } } },
     orderBy: { createdAt: "asc" },
   });
+  if (access) {
+    redirect(`/app/brain/${encodeURIComponent(access.brain.name)}`);
+  }
 
-  if (!access) redirect("/app/console");
+  // No explicit grants — org members still have implicit editor access to
+  // `type: "org"` brains, so land them on the first one instead of the
+  // console.
+  const membership = await prisma.organizationMembership.findFirst({
+    where: { userId: user.id, organizationId },
+    select: { id: true },
+  });
+  if (membership) {
+    const orgBrain = await tenant.brain.findFirst({
+      where: { type: "org" },
+      select: { name: true },
+      orderBy: { createdAt: "asc" },
+    });
+    if (orgBrain) {
+      redirect(`/app/brain/${encodeURIComponent(orgBrain.name)}`);
+    }
+  }
 
-  redirect(`/app/brain/${encodeURIComponent(access.brain.name)}`);
+  redirect("/app/console");
 }

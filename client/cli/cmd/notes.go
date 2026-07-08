@@ -189,10 +189,17 @@ func Create(args []string) error {
 	setLeafUsage(fs, leafHelp{
 		Summary: "Create a note. Content is read from stdin.",
 		Usage:   "aju create <path> [--brain <name>]",
-		Long:    "Pipe content into stdin; running without a pipe is a user error and is rejected with a hint.",
+		Long: `Pipe content into stdin; running without a pipe is a user error and is
+rejected with a hint.
+
+Notes are markdown. Fenced ` + "```mermaid and ```bpmn" + ` (complete BPMN 2.0
+XML including the BPMNDiagram/DI layout section) code blocks render as
+diagrams in the web app — see aju.sh/kb/data/diagrams for a working
+skeleton.`,
 		Examples: []string{
 			"echo '# Hello' | aju create notes/hello.md",
 			"cat draft.md | aju create drafts/draft.md --brain Acme",
+			"cat booking-process.md | aju create processes/booking.md  # doc with a ```bpmn block",
 		},
 	})
 	if err := parseFlags(fs, args); err != nil {
@@ -263,7 +270,10 @@ head; re-read, re-apply your edit, and retry.
 
 --force overrides this and writes unconditionally. Without --base-hash
 or --force the request falls back to legacy force-write and the server
-returns a Deprecation header.`,
+returns a Deprecation header.
+
+Fenced ` + "```mermaid and ```bpmn" + ` (BPMN 2.0 XML with DI) code blocks
+render as diagrams in the web app — see aju.sh/kb/data/diagrams.`,
 		Examples: []string{
 			"cat draft.md | aju update notes/hello.md --base-hash 9f3a...",
 			"cat draft.md | aju update notes/hello.md --force",

@@ -93,15 +93,35 @@ export async function resolveBrainForTool(
         },
         include: { brain: true },
       });
-      if (!access) {
-        throw new Error(`Brain not found or access denied: ${wanted}`);
+      if (access) {
+        return {
+          brainId: access.brain.id,
+          brainName: access.brain.name,
+          brainType: access.brain.type,
+          accessRole: access.role,
+        };
       }
-      return {
-        brainId: access.brain.id,
-        brainName: access.brain.name,
-        brainType: access.brain.type,
-        accessRole: access.role,
-      };
+
+      // Org-fallback for human principals: a `type: "org"` brain visible via
+      // org membership (RLS-scoped through `app.current_brain_ids`, populated
+      // by resolveTenantAccess). Members get editor access — org brains are
+      // shared workspaces. Agents never get the fallback: they see only
+      // explicit grants. Mirrors resolveBrain in src/lib/vault/brain.ts.
+      const orgBrain = !ctx.agentId
+        ? await tenant.brain.findFirst({
+            where: { name: wanted, type: "org" },
+          })
+        : null;
+      if (orgBrain) {
+        return {
+          brainId: orgBrain.id,
+          brainName: orgBrain.name,
+          brainType: orgBrain.type,
+          accessRole: "editor",
+        };
+      }
+
+      throw new Error(`Brain not found or access denied: ${wanted}`);
     }
 
     // Env-var / legacy caller — name lookup only within this tenant DB.
@@ -134,19 +154,37 @@ export async function resolveBrainForTool(
         include: { brain: true },
         orderBy: { createdAt: "asc" },
       }));
-    if (!chosen) {
-      throw new Error(
-        ctx.agentId
-          ? "No brains granted to this agent"
-          : "No brain configured for this user",
-      );
+    if (chosen) {
+      return {
+        brainId: chosen.brain.id,
+        brainName: chosen.brain.name,
+        brainType: chosen.brain.type,
+        accessRole: chosen.role,
+      };
     }
-    return {
-      brainId: chosen.brain.id,
-      brainName: chosen.brain.name,
-      brainType: chosen.brain.type,
-      accessRole: chosen.role,
-    };
+
+    // No explicit grants — human org members still reach `type: "org"`
+    // brains via the org fallback (RLS-scoped).
+    if (!ctx.agentId) {
+      const orgBrain = await tenant.brain.findFirst({
+        where: { type: "org" },
+        orderBy: { createdAt: "asc" },
+      });
+      if (orgBrain) {
+        return {
+          brainId: orgBrain.id,
+          brainName: orgBrain.name,
+          brainType: orgBrain.type,
+          accessRole: "editor",
+        };
+      }
+    }
+
+    throw new Error(
+      ctx.agentId
+        ? "No brains granted to this agent"
+        : "No brain configured for this user",
+    );
   }
 
   const fallback =
@@ -237,22 +275,45 @@ async function resolveBrainList(
       },
       include: { brain: true },
     });
-    const byName = new Map(accesses.map((a) => [a.brain.name, a]));
+    const byName = new Map<string, ResolvedBrain>(
+      accesses.map((a) => [
+        a.brain.name,
+        {
+          brainId: a.brain.id,
+          brainName: a.brain.name,
+          brainType: a.brain.type,
+          accessRole: a.role,
+        },
+      ]),
+    );
+
+    // Org-fallback for human principals: fill any name without an explicit
+    // BrainAccess row via a `type: "org"` brain visible through org
+    // membership (RLS-scoped). Agents see only explicit grants.
+    if (!ctx.agentId) {
+      const stillMissing = wanted.filter((n) => !byName.has(n));
+      if (stillMissing.length > 0) {
+        const orgBrains = await tenant.brain.findMany({
+          where: { name: { in: stillMissing }, type: "org" },
+        });
+        for (const b of orgBrains) {
+          byName.set(b.name, {
+            brainId: b.id,
+            brainName: b.name,
+            brainType: b.type,
+            accessRole: "editor",
+          });
+        }
+      }
+    }
+
     const missing = wanted.filter((n) => !byName.has(n));
     if (missing.length > 0) {
       throw new Error(
         `Brain not found or access denied: ${missing.join(", ")}`,
       );
     }
-    return wanted.map((n) => {
-      const a = byName.get(n)!;
-      return {
-        brainId: a.brain.id,
-        brainName: a.brain.name,
-        brainType: a.brain.type,
-        accessRole: a.role,
-      };
-    });
+    return wanted.map((n) => byName.get(n)!);
   }
 
   const brains = await tenant.brain.findMany({
@@ -285,12 +346,37 @@ async function loadAccessibleBrains(
       include: { brain: true },
       orderBy: { createdAt: "asc" },
     });
-    return accesses.map((a) => ({
-      brainId: a.brain.id,
-      brainName: a.brain.name,
-      brainType: a.brain.type,
-      accessRole: a.role,
-    }));
+    const byId = new Map<string, ResolvedBrain>(
+      accesses.map((a) => [
+        a.brain.id,
+        {
+          brainId: a.brain.id,
+          brainName: a.brain.name,
+          brainType: a.brain.type,
+          accessRole: a.role,
+        },
+      ]),
+    );
+
+    // Org-fallback for human principals: include every `type: "org"` brain
+    // visible through org membership (RLS-scoped) as implicit editor.
+    if (!ctx.agentId) {
+      const orgBrains = await tenant.brain.findMany({
+        where: { type: "org" },
+        orderBy: { createdAt: "asc" },
+      });
+      for (const b of orgBrains) {
+        if (byId.has(b.id)) continue;
+        byId.set(b.id, {
+          brainId: b.id,
+          brainName: b.name,
+          brainType: b.type,
+          accessRole: "editor",
+        });
+      }
+    }
+
+    return [...byId.values()];
   }
   const brains = await tenant.brain.findMany({});
   return brains.map((b) => ({

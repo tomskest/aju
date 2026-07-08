@@ -207,7 +207,9 @@ body {
   border-bottom-color: var(--color-muted);
 }
 
-/* Mermaid diagram block — replaces ```mermaid code blocks after hydration.
+/* Diagram figure chrome — replaces ```mermaid and ```bpmn code blocks
+ * after hydration. The mermaid-* classes are shared by all diagram
+ * figures (BPMN figures carry `bpmn-figure` alongside `mermaid-figure`).
  * Aiming for a stylish, premium feel: dark panel, subtle accent rim,
  * mono corner label, copy button revealed on hover. */
 @keyframes kb-mermaid-fade {
@@ -435,6 +437,28 @@ body {
   background: rgba(239, 68, 68, 0.08);
   border: 1px solid rgba(239, 68, 68, 0.25);
   border-radius: 6px;
+}
+
+/* bpmn.io license requires visible attribution on rendered diagrams. */
+.kb-prose .bpmn-figure .bpmn-attribution {
+  position: absolute;
+  bottom: 0.5rem;
+  right: 0.75rem;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-faint);
+  text-decoration: none;
+  border-bottom: none;
+  opacity: 0.55;
+  transition:
+    opacity 0.18s ease,
+    color 0.18s ease;
+}
+.kb-prose .bpmn-figure .bpmn-attribution:hover {
+  opacity: 1;
+  color: var(--color-muted);
 }
 
 .search-snippet mark {

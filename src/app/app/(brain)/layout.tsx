@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { currentUser, getActiveOrganizationId } from "@/lib/auth";
-import { tenantDbFor } from "@/lib/db";
+import { prisma, tenantDbFor } from "@/lib/db";
 import { withBrainContext } from "@/lib/tenant";
 import BrainsRail, {
   type BrainRailItem,
@@ -35,10 +35,39 @@ export default async function BrainAreaLayout({
     orderBy: { createdAt: "asc" },
   });
 
+  type RailRow = {
+    brain: { id: string; name: string; type: string };
+    role: string;
+  };
+  const rows: RailRow[] = accessRows.map((r) => ({
+    brain: r.brain,
+    role: r.role,
+  }));
+
+  // Org-fallback: members get implicit editor access to every `type: "org"`
+  // brain, mirroring GET /api/brains and the console listing. Without this
+  // the rail hides org brains from members who lack an explicit row.
+  const membership = await prisma.organizationMembership.findFirst({
+    where: { userId: user.id, organizationId },
+    select: { id: true },
+  });
+  if (membership) {
+    const seen = new Set(rows.map((r) => r.brain.id));
+    const orgBrains = await tenant.brain.findMany({
+      where: { type: "org" },
+      select: { id: true, name: true, type: true },
+      orderBy: { createdAt: "asc" },
+    });
+    for (const b of orgBrains) {
+      if (seen.has(b.id)) continue;
+      rows.push({ brain: b, role: "editor" });
+    }
+  }
+
   // Doc count per brain — single grouped query, RLS scoped to the
   // accessible set so we don't leak counts for brains the user shouldn't
   // see.
-  const brainIds = accessRows.map((r) => r.brain.id);
+  const brainIds = rows.map((r) => r.brain.id);
   const counts = brainIds.length
     ? await withBrainContext(tenant, brainIds, async (tx) => {
         return tx.vaultDocument.groupBy({
@@ -54,7 +83,7 @@ export default async function BrainAreaLayout({
     countByBrain.set(row.brainId, row._count._all);
   }
 
-  const items: BrainRailItem[] = accessRows.map((r) => ({
+  const items: BrainRailItem[] = rows.map((r) => ({
     name: r.brain.name,
     type: r.brain.type,
     role: r.role,

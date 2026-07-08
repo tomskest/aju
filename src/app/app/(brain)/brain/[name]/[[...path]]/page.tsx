@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { tenantDbFor } from "@/lib/db";
+import { prisma, tenantDbFor } from "@/lib/db";
 import { currentUser, getActiveOrganizationId } from "@/lib/auth";
 import { withBrainContext } from "@/lib/tenant";
 import { renderMarkdown, resolveWikilinksToMarkdown } from "@/lib/vault";
@@ -49,8 +49,9 @@ export default async function BrainPage(props: PageProps) {
 
   const tenant = await tenantDbFor(organizationId);
 
-  // Resolve the brain by name. Owners of the org see every brain in the
-  // tenant DB; non-owners need a BrainAccess row.
+  // Resolve the brain by name, then the caller's role: an explicit
+  // BrainAccess row, or — for `type: "org"` brains — implicit editor via
+  // org membership, mirroring loadAccessibleBrain in the console.
   const brain = await tenant.brain.findFirst({
     where: { name: brainName },
     select: { id: true, name: true, type: true },
@@ -61,15 +62,21 @@ export default async function BrainPage(props: PageProps) {
     where: { brainId_userId: { brainId: brain.id, userId: user.id } },
     select: { role: true },
   });
-  if (!access) notFound();
+  let role = access?.role ?? null;
+  if (!role && brain.type === "org") {
+    const membership = await prisma.organizationMembership.findFirst({
+      where: { userId: user.id, organizationId },
+      select: { id: true },
+    });
+    if (membership) role = "editor";
+  }
+  if (!role) notFound();
 
-  const canWrite = access.role === "owner" || access.role === "editor";
+  const canWrite = role === "owner" || role === "editor";
   // Validation gate. Mirror src/lib/vault/brain.ts canValidate(): personal
   // brains are owner-only for validation, org brains follow canWrite.
   const canValidate =
-    brain.type === "personal"
-      ? access.role === "owner"
-      : access.role === "owner" || access.role === "editor";
+    brain.type === "personal" ? role === "owner" : canWrite;
 
   // Build the sidebar list + (if a path is given) load the focused doc.
   // Done inside withBrainContext so RLS scopes the queries to this brain.

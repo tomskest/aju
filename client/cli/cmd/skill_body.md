@@ -36,7 +36,7 @@ A profile in `~/.aju/config.json` bundles (server, API key, pinned brain). Namin
 
 - **Personal brains** (`personal`) live in the user's own workspace and no one else has access.
 - **Org brains** (`org`) are shared inside a team. Other members may be reading and writing them too — treat them like a team wiki, not a private notebook.
-- Each org has its own isolated database under the hood. `--brain a,b` and `--brain all` both span only the brains *inside one org* (the org bound to `--profile`). Cross-org queries require running one command per profile and merging the results yourself.
+- Each org has its own isolated database under the hood. `--brain a,b` and `--brain all` both span only the brains _inside one org_ (the org bound to `--profile`). Cross-org queries require running one command per profile and merging the results yourself.
 
 ### Routing user phrasing → profile + brain
 
@@ -84,6 +84,7 @@ aju browse <dir> --profile <name>                  # list docs under a directory
 **Preferred default: run `search` and `semantic` in parallel in a single tool call.** Keyword and meaning-based retrieval catch different things — running both costs ~200ms total but avoids missed hits from paraphrasing. Merge the results, dedupe by path, pick the best.
 
 Example of the parallel pattern:
+
 ```bash
 # Run both at once in the background, then read results
 aju search "pgvector indexing" --profile <name> &
@@ -162,6 +163,7 @@ EOF
 - **Wikilinks.** `[[Like This]]` creates graph edges automatically. Link to related docs instead of rewriting context. Linked docs don't have to exist yet — dangling links resolve when the target is written later.
 - **Titles short and stable.** If you rename a document heavily, backlinks can drift.
 - **One idea per file.** Split sprawling notes into topic files linked together.
+- **Diagrams.** Fenced ` ```mermaid ` and ` ```bpmn ` code blocks render as diagrams in the web app. A ` ```bpmn ` block must be complete BPMN 2.0 XML _including_ the `bpmndi:BPMNDiagram` layout section (bpmn-js does no auto-layout — every element needs a `BPMNShape`/`BPMNEdge` with coordinates). Working skeleton: `aju read` the public KB page at aju.sh/kb/data/diagrams, or copy from an existing process doc. Plain ` ```xml ` blocks are never rendered.
 
 ### Updating existing memory
 
@@ -228,6 +230,7 @@ With multiple brains, server-side RRF fuses all candidates into one ranked list 
 If the profile pins a default brain, `--brain` may be omitted on single-brain ops; the profile's pinned brain is used. When in doubt, pass `--brain` explicitly.
 
 Manage brains within a profile's org:
+
 ```bash
 aju brains list --profile <name>                  # show brains reachable with this profile
 aju brains create <new-name> --profile <name>     # create a brain in this profile's org
@@ -258,6 +261,7 @@ Always available, even after the beta ends. Useful when the user wants a local c
 In every workflow below, pick the profile that matches the user's intent (see the routing table above). Substitute the actual profile name for `<name>`.
 
 ### "What do we know about X?"
+
 ```bash
 # Run these two in parallel in one tool call:
 aju search "X" --profile <name>
@@ -268,6 +272,7 @@ aju related <top_path> --profile <name>        # adjacent context
 ```
 
 ### "Add this to my research brain: <paper / finding / idea>"
+
 ```bash
 # 1. Check the research brain first
 aju search "<topic>" --brain research --profile <name>
@@ -289,9 +294,11 @@ source: claude-code
 <Content with [[wikilinks]] to existing notes>
 EOF
 ```
+
 Target the brain that matches the user's intent — research findings go in `research`, personal thoughts in a personal brain, team decisions in a team org brain. The profile decides the org; `--brain` decides the brain within that org.
 
 ### "What's the whole picture around X?" (multi-hop / synthesis)
+
 ```bash
 aju deep-search "<full question>" --profile <name>     # returns seeds + graph neighbors in one call
 # results tagged S (seed) or G1/G2 (graph hop distance); read the top few and synthesize
@@ -304,6 +311,7 @@ aju deep-search "<full question>" --profile <name>     # returns seeds + graph n
 3. If no doc fits: choose a stable path (`topics/<slug>.md` or `decisions/<slug>.md`) → `aju create <path> --profile <name>` with frontmatter, body, and wikilinks to related docs
 
 ### "What did I decide about X?"
+
 ```bash
 aju search "X" --profile <name>
 aju browse decisions/ --profile <name>                  # if the user uses a decisions/ convention
@@ -311,12 +319,14 @@ aju semantic "why did I choose X" --profile <name>
 ```
 
 ### "Show me yesterday's notes"
+
 ```bash
 aju browse journal/ --profile <name>
 aju read journal/2026-04-16.md --profile <name>
 ```
 
 ### "Continue our conversation about X"
+
 ```bash
 aju search "X" --profile <name>
 aju read <path> --profile <name>           # pull the last thread
@@ -325,6 +335,7 @@ aju update <path> --profile <name>         # append the new turn, with wikilinks
 ```
 
 ### "How did this document come to exist?"
+
 ```bash
 aju changes --since 2026-01-01T00:00:00Z --profile <name>  # see when paths were created or modified
 aju backlinks <path> --profile <name>                      # what else points here
@@ -387,10 +398,10 @@ Every aju command writes machine-readable output to stdout and errors to stderr.
 
 Brains and organizations have three role levels. When a user asks "can I edit this?" or "who can see this?", the answer depends on their role in the relevant brain or org:
 
-| Role | Can do |
-|---|---|
-| **owner** | Read, write, delete, invite members, revoke members, rename, delete the brain/org |
-| **editor** | Read, write, delete documents |
-| **viewer** | Read only |
+| Role       | Can do                                                                            |
+| ---------- | --------------------------------------------------------------------------------- |
+| **owner**  | Read, write, delete, invite members, revoke members, rename, delete the brain/org |
+| **editor** | Read, write, delete documents                                                     |
+| **viewer** | Read only                                                                         |
 
 Use `aju status --profile <name>` to see the signed-in identity for that profile. Use `aju brains list --profile <name>` to see roles across the brains reachable with that profile. Use `aju orgs list --profile <name>` for org-level roles.

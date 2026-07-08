@@ -36,6 +36,7 @@
     "@modelcontextprotocol/sdk": "^1",
     "@prisma/client": "^6.19.3",
     "@tigrisdata/cli": "^2.17.0",
+    "bpmn-js": "^18.20.0",
     "diff": "^8.0.3",
     "graphile-worker": "^0.17.2",
     "gray-matter": "^4",

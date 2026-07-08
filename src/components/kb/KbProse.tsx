@@ -4,10 +4,11 @@ import { memo, useEffect, useRef } from "react";
 
 /**
  * Renders KB markdown HTML with the project's `kb-prose` style and
- * progressively upgrades any ```mermaid code block into a rendered
- * SVG diagram. Mermaid's runtime is dynamically imported on first
- * paint that contains a diagram, so the ~500KB cost is paid only on
- * pages that actually need it.
+ * progressively upgrades diagram code blocks into rendered SVG:
+ * ```mermaid via mermaid, ```bpmn (BPMN 2.0 XML) via bpmn-js. Each
+ * runtime is dynamically imported on first paint that contains a
+ * matching block, so the bundle cost is paid only on pages that
+ * actually need it.
  *
  * The HTML comes from a project-scoped Marked instance that strips
  * raw HTML input, so it is safe to inject here.
@@ -109,6 +110,57 @@ async function loadMermaid(): Promise<typeof import("mermaid").default> {
     });
   }
   return mermaidLoadPromise;
+}
+
+let bpmnViewerLoadPromise: Promise<
+  typeof import("bpmn-js/lib/Viewer").default
+> | null = null;
+
+async function loadBpmnViewer(): Promise<
+  typeof import("bpmn-js/lib/Viewer").default
+> {
+  if (!bpmnViewerLoadPromise) {
+    bpmnViewerLoadPromise = import("bpmn-js/lib/Viewer").then(
+      (mod) => mod.default,
+    );
+  }
+  return bpmnViewerLoadPromise;
+}
+
+/**
+ * Renders BPMN 2.0 XML to a standalone SVG string. bpmn-js needs a
+ * DOM-attached container for text layout, so an off-screen host is
+ * created for the import and removed once the SVG is exported —
+ * nothing interactive is kept alive afterwards.
+ */
+async function renderBpmnSvg(source: string): Promise<string> {
+  const BpmnViewer = await loadBpmnViewer();
+
+  const host = document.createElement("div");
+  host.style.position = "absolute";
+  host.style.left = "-99999px";
+  host.style.top = "0";
+  host.style.width = "1600px";
+  host.style.height = "1200px";
+  document.body.appendChild(host);
+
+  const viewer = new BpmnViewer({
+    container: host,
+    bpmnRenderer: {
+      defaultFillColor: "rgba(34, 197, 94, 0.08)",
+      defaultStrokeColor: "#86efac",
+      defaultLabelColor: "#ececee",
+    },
+  });
+
+  try {
+    await viewer.importXML(source);
+    const { svg } = await viewer.saveSVG();
+    return svg;
+  } finally {
+    viewer.destroy();
+    host.remove();
+  }
 }
 
 function parseColorToRgb(input: string): [number, number, number] | null {
@@ -353,19 +405,23 @@ function KbProseInner({ html, className }: Props) {
     const root = containerRef.current;
     if (!root) return;
 
-    const codeBlocks = Array.from(
+    const mermaidBlocks = Array.from(
       root.querySelectorAll<HTMLElement>("code.language-mermaid"),
     );
-    if (codeBlocks.length === 0) return;
+    const bpmnBlocks = Array.from(
+      root.querySelectorAll<HTMLElement>("code.language-bpmn"),
+    );
+    if (mermaidBlocks.length === 0 && bpmnBlocks.length === 0) return;
 
     let cancelled = false;
 
     (async () => {
+      if (mermaidBlocks.length === 0) return;
       const mermaid = await loadMermaid();
       if (cancelled) return;
 
-      for (let i = 0; i < codeBlocks.length; i++) {
-        const codeEl = codeBlocks[i];
+      for (let i = 0; i < mermaidBlocks.length; i++) {
+        const codeEl = mermaidBlocks[i];
         const pre = codeEl.parentElement;
         if (!pre || pre.tagName !== "PRE") continue;
         if (pre.dataset.mermaidEnhanced === "1") continue;
@@ -442,6 +498,94 @@ function KbProseInner({ html, className }: Props) {
       }
     })().catch((err) => {
       console.error("[kb-prose] mermaid enhancement failed:", err);
+    });
+
+    (async () => {
+      if (bpmnBlocks.length === 0) return;
+
+      for (let i = 0; i < bpmnBlocks.length; i++) {
+        const codeEl = bpmnBlocks[i];
+        const pre = codeEl.parentElement;
+        if (!pre || pre.tagName !== "PRE") continue;
+        if (pre.dataset.bpmnEnhanced === "1") continue;
+
+        const source = codeEl.textContent ?? "";
+
+        let svg: string;
+        try {
+          svg = await renderBpmnSvg(source);
+        } catch (err) {
+          pre.dataset.bpmnEnhanced = "error";
+          const note = document.createElement("div");
+          note.className = "mermaid-error";
+          note.textContent = `bpmn: ${
+            err instanceof Error ? err.message : String(err)
+          }`;
+          pre.parentElement?.insertBefore(note, pre.nextSibling);
+          continue;
+        }
+        if (cancelled) return;
+
+        const figure = document.createElement("figure");
+        figure.className = "mermaid-figure bpmn-figure";
+        figure.dataset.bpmnEnhanced = "1";
+
+        const label = document.createElement("span");
+        label.className = "mermaid-label";
+        label.textContent = "bpmn";
+        figure.appendChild(label);
+
+        const copyBtn = document.createElement("button");
+        copyBtn.type = "button";
+        copyBtn.className = "mermaid-copy";
+        copyBtn.textContent = "copy";
+        copyBtn.title = "Copy BPMN 2.0 XML source";
+        copyBtn.addEventListener("click", () => {
+          void navigator.clipboard.writeText(source).then(
+            () => {
+              copyBtn.textContent = "copied";
+              window.setTimeout(() => {
+                copyBtn.textContent = "copy";
+              }, 1200);
+            },
+            () => {
+              copyBtn.textContent = "failed";
+            },
+          );
+        });
+        figure.appendChild(copyBtn);
+
+        const expandBtn = document.createElement("button");
+        expandBtn.type = "button";
+        expandBtn.className = "mermaid-expand";
+        expandBtn.textContent = "expand";
+        expandBtn.title = "Open fullscreen (drag to pan, scroll to zoom)";
+        figure.appendChild(expandBtn);
+
+        const svgWrap = document.createElement("div");
+        svgWrap.className = "mermaid-svg";
+        svgWrap.innerHTML = svg;
+        figure.appendChild(svgWrap);
+
+        expandBtn.addEventListener("click", () => {
+          const svgEl = svgWrap.querySelector("svg");
+          if (svgEl) openMermaidFullscreen(svgEl);
+        });
+
+        // Visible attribution is a bpmn.io license requirement for
+        // rendering diagrams with bpmn-js.
+        const attribution = document.createElement("a");
+        attribution.className = "bpmn-attribution";
+        attribution.href = "https://bpmn.io";
+        attribution.target = "_blank";
+        attribution.rel = "noopener noreferrer";
+        attribution.textContent = "powered by bpmn.io";
+        figure.appendChild(attribution);
+
+        pre.replaceWith(figure);
+      }
+    })().catch((err) => {
+      console.error("[kb-prose] bpmn enhancement failed:", err);
     });
 
     return () => {

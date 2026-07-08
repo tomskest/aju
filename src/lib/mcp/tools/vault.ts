@@ -13,6 +13,7 @@ import { updateDocumentEmbedding } from "@/lib/embeddings";
 import { withTenant } from "@/lib/tenant";
 import {
   canWrite,
+  ctxPrincipalFilter,
   type McpToolContext,
   errorResult,
   requireOrgId,
@@ -20,10 +21,7 @@ import {
   textResult,
 } from "./shared";
 
-export function registerVaultTools(
-  server: McpServer,
-  ctx: McpToolContext,
-): void {
+export function registerVaultTools(server: McpServer, ctx: McpToolContext): void {
   // ── aju_read ────────────────────────────────────────
   server.tool(
     "aju_read",
@@ -147,10 +145,12 @@ export function registerVaultTools(
   // ── aju_create ──────────────────────────────────────
   server.tool(
     "aju_create",
-    "Create a new memory / note / document in an aju brain. Content is parsed for frontmatter, tags, and wikilinks; the document is indexed for full-text + semantic search.",
+    "Create a new memory / note / document in an aju brain. Content is parsed for frontmatter, tags, and wikilinks; the document is indexed for full-text + semantic search. Fenced ```mermaid and ```bpmn (complete BPMN 2.0 XML incl. the BPMNDiagram/DI layout section) code blocks render as diagrams in the web app — see the 'Diagrams in documents' KB page for a working skeleton.",
     {
       path: z.string().describe("Vault path (e.g. 'notes/new-thought.md'). Should end in .md."),
-      content: z.string().describe("Full markdown content, including optional --- frontmatter --- block."),
+      content: z
+        .string()
+        .describe("Full markdown content, including optional --- frontmatter --- block."),
       brain: z.string().optional().describe("Brain name. Omit for default."),
     },
     async ({ path, content, brain }) => {
@@ -178,7 +178,9 @@ export function registerVaultTools(
                 brainId: b.brainId,
                 path,
                 title: parsed.title,
-                frontmatter: (parsed.frontmatter ?? undefined) as PrismaTenant.InputJsonValue | undefined,
+                frontmatter: (parsed.frontmatter ?? undefined) as
+                  | PrismaTenant.InputJsonValue
+                  | undefined,
                 docType: parsed.docType,
                 docStatus: parsed.docStatus,
                 tags: parsed.tags,
@@ -250,7 +252,7 @@ export function registerVaultTools(
   // ── aju_update ──────────────────────────────────────
   server.tool(
     "aju_update",
-    "Replace the full content of an existing memory / note / document in an aju brain. Re-parses frontmatter and re-indexes embeddings. Pass baseHash + baseContent (from a prior aju_read) to enable compare-and-swap with three-way merge — concurrent edits to non-overlapping regions auto-merge; conflicts are returned so the agent can re-plan.",
+    "Replace the full content of an existing memory / note / document in an aju brain. Re-parses frontmatter and re-indexes embeddings. Pass baseHash + baseContent (from a prior aju_read) to enable compare-and-swap with three-way merge — concurrent edits to non-overlapping regions auto-merge; conflicts are returned so the agent can re-plan. Fenced ```mermaid and ```bpmn (BPMN 2.0 XML with DI) code blocks render as diagrams in the web app.",
     {
       path: z.string().describe("Existing document path."),
       content: z.string().describe("Full replacement markdown content."),
@@ -312,8 +314,7 @@ export function registerVaultTools(
                 return {
                   conflict: {
                     error: "merge_conflict",
-                    message:
-                      "Concurrent edits to overlapping regions. Resolve and retry.",
+                    message: "Concurrent edits to overlapping regions. Resolve and retry.",
                     headHash: existing.contentHash,
                     headContent: existing.content,
                     baseHash,
@@ -331,7 +332,9 @@ export function registerVaultTools(
               where: { id: existing.id },
               data: {
                 title: parsed.title,
-                frontmatter: (parsed.frontmatter ?? undefined) as PrismaTenant.InputJsonValue | undefined,
+                frontmatter: (parsed.frontmatter ?? undefined) as
+                  | PrismaTenant.InputJsonValue
+                  | undefined,
                 docType: parsed.docType,
                 docStatus: parsed.docStatus,
                 tags: parsed.tags,
@@ -358,7 +361,7 @@ export function registerVaultTools(
                 content: parsed.content,
                 contentHash: parsed.contentHash,
                 parentHash: existing.contentHash,
-                mergeParentHash: merged ? baseHash ?? null : null,
+                mergeParentHash: merged ? (baseHash ?? null) : null,
                 source: "mcp",
                 changedBy: ctx.identity,
               },
@@ -408,9 +411,7 @@ export function registerVaultTools(
           title: result.updatedTitle,
           id: result.updatedId,
           contentHash: result.updatedHash,
-          ...(result.merged
-            ? { merged: true, mergedFromHeadHash: result.mergedFromHeadHash }
-            : {}),
+          ...(result.merged ? { merged: true, mergedFromHeadHash: result.mergedFromHeadHash } : {}),
         });
       } catch (err) {
         return errorResult(String(err instanceof Error ? err.message : err));
@@ -432,10 +433,7 @@ export function registerVaultTools(
         .max(200)
         .optional()
         .describe("Max versions to return. Default 50."),
-      direction: z
-        .enum(["newest", "oldest"])
-        .optional()
-        .describe("Order. Default newest-first."),
+      direction: z.enum(["newest", "oldest"]).optional().describe("Order. Default newest-first."),
     },
     async ({ path, brain, limit, direction }) => {
       try {
@@ -562,23 +560,55 @@ export function registerVaultTools(
         return await withTenant(
           { organizationId, userId: ctx.userId, agentId: ctx.agentId },
           async ({ tx }) => {
-            if (ctx.userId) {
+            const principal = ctxPrincipalFilter(ctx);
+            if (principal) {
               const access = await tx.brainAccess.findMany({
-                where: { userId: ctx.userId },
+                where: principal,
                 include: {
                   brain: { include: { _count: { select: { documents: true } } } },
                 },
                 orderBy: { brain: { createdAt: "asc" } },
               });
-              return textResult({
-                count: access.length,
-                brains: access.map((a) => ({
-                  name: a.brain.name,
-                  type: a.brain.type,
-                  role: a.role,
-                  documentCount: a.brain._count.documents,
-                })),
-              });
+              type BrainListRow = {
+                name: string;
+                type: string;
+                role: string;
+                documentCount: number;
+              };
+              const byId = new Map<string, BrainListRow>(
+                access.map((a) => [
+                  a.brain.id,
+                  {
+                    name: a.brain.name,
+                    type: a.brain.type,
+                    role: a.role,
+                    documentCount: a.brain._count.documents,
+                  },
+                ]),
+              );
+
+              // Org-fallback for human principals: `type: "org"` brains
+              // visible through org membership (RLS-scoped) list as implicit
+              // editor. Agents see only explicit grants.
+              if (!ctx.agentId) {
+                const orgBrains = await tx.brain.findMany({
+                  where: { type: "org" },
+                  include: { _count: { select: { documents: true } } },
+                  orderBy: { createdAt: "asc" },
+                });
+                for (const b of orgBrains) {
+                  if (byId.has(b.id)) continue;
+                  byId.set(b.id, {
+                    name: b.name,
+                    type: b.type,
+                    role: "editor",
+                    documentCount: b._count.documents,
+                  });
+                }
+              }
+
+              const brains = [...byId.values()];
+              return textResult({ count: brains.length, brains });
             }
             // Legacy env-var path — list every brain in this tenant DB.
             const brains = await tx.brain.findMany({

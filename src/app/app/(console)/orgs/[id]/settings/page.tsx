@@ -5,12 +5,8 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { currentUser } from "@/lib/auth";
 import { deleteOrganizationWithStorage } from "@/lib/vault";
-import {
-  canManageMembers,
-  canManageOrg,
-  slugify,
-  type OrgRole,
-} from "@/lib/tenant";
+import { canManageMembers, canManageOrg, slugify, type OrgRole } from "@/lib/tenant";
+import { slackIntegrationEnabled } from "@/lib/agent/flags";
 
 export const dynamic = "force-dynamic";
 
@@ -107,8 +103,7 @@ async function toggleAutoAcceptAction(formData: FormData): Promise<void> {
   // Checkbox is present in formData only when checked. Read the desired value
   // from a hidden field so we can distinguish "on" (intent: enable) from "off"
   // (intent: disable) in a single form.
-  const desired =
-    (formData.get("autoAcceptDomainRequests") as string | null) === "on";
+  const desired = (formData.get("autoAcceptDomainRequests") as string | null) === "on";
 
   await prisma.organization.update({
     where: { id: orgId },
@@ -165,10 +160,7 @@ const OK_MESSAGES: Record<string, string> = {
   "auto-accept": "auto-accept setting saved.",
 };
 
-export default async function OrgSettingsPage({
-  params,
-  searchParams,
-}: PageProps) {
+export default async function OrgSettingsPage({ params, searchParams }: PageProps) {
   const user = await currentUser();
   if (!user) redirect("/");
 
@@ -198,43 +190,41 @@ export default async function OrgSettingsPage({
   const canToggleAutoAccept = canManageMembers(role);
   const canDelete = canManage && !org.isPersonal;
 
-  const errorMessage = sp.error ? ERROR_MESSAGES[sp.error] ?? sp.error : null;
-  const okMessage = sp.ok ? OK_MESSAGES[sp.ok] ?? sp.ok : null;
+  const errorMessage = sp.error ? (ERROR_MESSAGES[sp.error] ?? sp.error) : null;
+  const okMessage = sp.ok ? (OK_MESSAGES[sp.ok] ?? sp.ok) : null;
 
   return (
     <div className="flex flex-col gap-10">
       <section className="flex flex-col gap-3">
         <Link
           href={`/app/orgs/${org.id}`}
-          className="font-mono text-[11px] uppercase tracking-[0.24em] text-[var(--color-muted)] transition hover:text-[var(--color-ink)]"
+          className="font-mono text-[11px] tracking-[0.24em] text-[var(--color-muted)] uppercase transition hover:text-[var(--color-ink)]"
         >
           ← {org.name}
         </Link>
-        <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-[var(--color-muted)]">
+        <p className="font-mono text-[11px] tracking-[0.24em] text-[var(--color-muted)] uppercase">
           settings
         </p>
-        <h1 className="text-[28px] font-light leading-tight tracking-[-0.02em] text-[var(--color-ink)]">
+        <h1 className="text-[28px] leading-tight font-light tracking-[-0.02em] text-[var(--color-ink)]">
           organization settings
         </h1>
         <p className="max-w-[520px] text-[13px] leading-6 text-[var(--color-muted)]">
-          Configure this organization. Owners can rename and delete; owners and
-          admins can adjust domain request behaviour.
+          Configure this organization. Owners can rename and delete; owners and admins can adjust
+          domain request behaviour.
         </p>
       </section>
 
       {errorMessage && (
         <div className="rounded-xl border border-[var(--color-accent)]/40 bg-[var(--color-panel)]/60 p-4">
-          <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-[var(--color-accent)]">
+          <p className="font-mono text-[11px] tracking-[0.24em] text-[var(--color-accent)] uppercase">
             error
           </p>
-          <p className="mt-1 text-[13px] text-[var(--color-ink)]">
-            {errorMessage}
-          </p>
+          <p className="mt-1 text-[13px] text-[var(--color-ink)]">{errorMessage}</p>
         </div>
       )}
       {okMessage && (
         <div className="rounded-xl border border-white/10 bg-[var(--color-panel)]/60 p-4">
-          <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-[var(--color-accent)]">
+          <p className="font-mono text-[11px] tracking-[0.24em] text-[var(--color-accent)] uppercase">
             saved
           </p>
           <p className="mt-1 text-[13px] text-[var(--color-ink)]">{okMessage}</p>
@@ -244,21 +234,19 @@ export default async function OrgSettingsPage({
       {/* Rename */}
       <section className="flex flex-col gap-4 rounded-xl border border-white/10 bg-[var(--color-panel)]/85 p-5">
         <div className="flex items-baseline justify-between gap-3">
-          <h2 className="text-[15px] font-medium text-[var(--color-ink)]">
-            Rename
-          </h2>
-          <span className="font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--color-faint)]">
+          <h2 className="text-[15px] font-medium text-[var(--color-ink)]">Rename</h2>
+          <span className="font-mono text-[10px] tracking-[0.24em] text-[var(--color-faint)] uppercase">
             owner only
           </span>
         </div>
         <p className="text-[13px] leading-6 text-[var(--color-muted)]">
-          Renaming the organization will regenerate its slug. Existing links
-          using the old slug will still work via the org id.
+          Renaming the organization will regenerate its slug. Existing links using the old slug will
+          still work via the org id.
         </p>
         <form action={renameOrgAction} className="flex flex-col gap-3">
           <input type="hidden" name="orgId" value={org.id} />
           <label className="flex flex-col gap-1.5">
-            <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--color-faint)]">
+            <span className="font-mono text-[10px] tracking-[0.22em] text-[var(--color-faint)] uppercase">
               name
             </span>
             <input
@@ -272,14 +260,13 @@ export default async function OrgSettingsPage({
             />
           </label>
           <p className="font-mono text-[11px] text-[var(--color-faint)]">
-            current slug:{" "}
-            <span className="text-[var(--color-muted)]">{org.slug}</span>
+            current slug: <span className="text-[var(--color-muted)]">{org.slug}</span>
           </p>
           <div>
             <button
               type="submit"
               disabled={!canManage}
-              className="inline-flex items-center justify-center rounded-md border border-[var(--color-accent)]/40 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--color-accent)] transition hover:border-[var(--color-accent)]/70 hover:bg-white/[0.02] disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex items-center justify-center rounded-md border border-[var(--color-accent)]/40 px-3 py-1.5 font-mono text-[11px] tracking-[0.2em] text-[var(--color-accent)] uppercase transition hover:border-[var(--color-accent)]/70 hover:bg-white/[0.02] disabled:cursor-not-allowed disabled:opacity-50"
             >
               save name
             </button>
@@ -293,14 +280,13 @@ export default async function OrgSettingsPage({
           <h2 className="text-[15px] font-medium text-[var(--color-ink)]">
             Auto-accept domain requests
           </h2>
-          <span className="font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--color-faint)]">
+          <span className="font-mono text-[10px] tracking-[0.24em] text-[var(--color-faint)] uppercase">
             owner + admin
           </span>
         </div>
         <p className="text-[13px] leading-6 text-[var(--color-muted)]">
-          When enabled, access requests from people whose email domain is
-          verified for this org are auto-approved. Individual invitations are
-          unaffected.
+          When enabled, access requests from people whose email domain is verified for this org are
+          auto-approved. Individual invitations are unaffected.
         </p>
         <form action={toggleAutoAcceptAction} className="flex flex-col gap-3">
           <input type="hidden" name="orgId" value={org.id} />
@@ -320,7 +306,7 @@ export default async function OrgSettingsPage({
             <button
               type="submit"
               disabled={!canToggleAutoAccept}
-              className="inline-flex items-center justify-center rounded-md border border-white/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--color-muted)] transition hover:border-white/20 hover:text-[var(--color-ink)] disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex items-center justify-center rounded-md border border-white/10 px-3 py-1.5 font-mono text-[11px] tracking-[0.2em] text-[var(--color-muted)] uppercase transition hover:border-white/20 hover:text-[var(--color-ink)] disabled:cursor-not-allowed disabled:opacity-50"
             >
               save setting
             </button>
@@ -329,27 +315,48 @@ export default async function OrgSettingsPage({
         <div className="mt-1 border-t border-white/5 pt-4">
           <Link
             href={`/app/orgs/${org.id}/domains`}
-            className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--color-accent)] transition hover:text-[var(--color-ink)]"
+            className="font-mono text-[11px] tracking-[0.2em] text-[var(--color-accent)] uppercase transition hover:text-[var(--color-ink)]"
           >
             manage domains →
           </Link>
         </div>
       </section>
 
+      {/* Integrations */}
+      {slackIntegrationEnabled() && (
+        <section className="flex flex-col gap-4 rounded-xl border border-white/10 bg-[var(--color-panel)]/85 p-5">
+          <div className="flex items-baseline justify-between gap-3">
+            <h2 className="text-[15px] font-medium text-[var(--color-ink)]">Integrations</h2>
+            <span className="font-mono text-[10px] tracking-[0.24em] text-[var(--color-faint)] uppercase">
+              owner / admin
+            </span>
+          </div>
+          <p className="text-[13px] leading-6 text-[var(--color-muted)]">
+            Connect this organization&apos;s brains to outside tools. Slack: mention @aju in a bound
+            channel to recall and capture team memory.
+          </p>
+          <div>
+            <Link
+              href={`/app/orgs/${org.id}/settings/slack`}
+              className="font-mono text-[11px] tracking-[0.2em] text-[var(--color-accent)] uppercase transition hover:text-[var(--color-ink)]"
+            >
+              aju in slack →
+            </Link>
+          </div>
+        </section>
+      )}
+
       {/* Delete */}
       <section className="flex flex-col gap-4 rounded-xl border border-[var(--color-accent)]/20 bg-[var(--color-panel)]/85 p-5">
         <div className="flex items-baseline justify-between gap-3">
-          <h2 className="text-[15px] font-medium text-[var(--color-ink)]">
-            Delete organization
-          </h2>
-          <span className="font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--color-accent)]">
+          <h2 className="text-[15px] font-medium text-[var(--color-ink)]">Delete organization</h2>
+          <span className="font-mono text-[10px] tracking-[0.24em] text-[var(--color-accent)] uppercase">
             danger zone
           </span>
         </div>
         {org.isPersonal ? (
           <p className="text-[13px] leading-6 text-[var(--color-muted)]">
-            This is your personal organization. Personal organizations cannot
-            be deleted.
+            This is your personal organization. Personal organizations cannot be deleted.
           </p>
         ) : !canManage ? (
           <p className="text-[13px] leading-6 text-[var(--color-muted)]">
@@ -358,14 +365,13 @@ export default async function OrgSettingsPage({
         ) : (
           <>
             <p className="text-[13px] leading-6 text-[var(--color-muted)]">
-              Deleting removes all memberships, invitations, domains, and
-              access requests. Any remaining brains must be moved or deleted
-              first. Type the slug to confirm:
+              Deleting removes all memberships, invitations, domains, and access requests. Any
+              remaining brains must be moved or deleted first. Type the slug to confirm:
             </p>
             <form action={deleteOrgAction} className="flex flex-col gap-3">
               <input type="hidden" name="orgId" value={org.id} />
               <label className="flex flex-col gap-1.5">
-                <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--color-faint)]">
+                <span className="font-mono text-[10px] tracking-[0.22em] text-[var(--color-faint)] uppercase">
                   type <span className="text-[var(--color-ink)]">{org.slug}</span> to confirm
                 </span>
                 <input
@@ -381,7 +387,7 @@ export default async function OrgSettingsPage({
                 <button
                   type="submit"
                   disabled={!canDelete}
-                  className="inline-flex items-center justify-center rounded-md border border-[var(--color-accent)]/50 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--color-accent)] transition hover:border-[var(--color-accent)] hover:bg-[var(--color-accent)]/10 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="inline-flex items-center justify-center rounded-md border border-[var(--color-accent)]/50 px-3 py-1.5 font-mono text-[11px] tracking-[0.2em] text-[var(--color-accent)] uppercase transition hover:border-[var(--color-accent)] hover:bg-[var(--color-accent)]/10 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   delete organization
                 </button>
