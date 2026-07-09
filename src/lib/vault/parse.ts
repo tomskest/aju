@@ -18,6 +18,12 @@ export interface ParsedDocument {
 
 const WIKILINK_REGEX = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
 
+// Stored `directory` values come from path.dirname and never carry leading or
+// trailing slashes; user-supplied directory filters must match that shape.
+export function normalizeDirectory(directory: string): string {
+  return directory.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+}
+
 export function parseDocument(
   rawContent: string,
   filePath: string

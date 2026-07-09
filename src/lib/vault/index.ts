@@ -7,6 +7,7 @@
  */
 export * from "./brain";
 export * from "./brain-delete";
+export * from "./browse";
 export * from "./kb";
 export * from "./kb-markdown";
 export * from "./parse";

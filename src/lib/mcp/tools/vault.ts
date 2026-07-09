@@ -7,7 +7,12 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Prisma as PrismaTenant } from "@prisma/client-tenant";
-import { parseDocument, threeWayMerge } from "@/lib/vault";
+import {
+  listSubdirectories,
+  normalizeDirectory,
+  parseDocument,
+  threeWayMerge,
+} from "@/lib/vault";
 import { scheduleRebuildLinks } from "@/lib/vault";
 import { updateDocumentEmbedding } from "@/lib/embeddings";
 import { withTenant } from "@/lib/tenant";
@@ -85,12 +90,14 @@ export function registerVaultTools(server: McpServer, ctx: McpToolContext): void
   // ── aju_browse ──────────────────────────────────────
   server.tool(
     "aju_browse",
-    "List documents under a directory prefix in an aju brain. Metadata only — use aju_read for full content. Useful to explore what memories / notes exist in a section.",
+    "List documents in a directory of an aju brain, plus its immediate subdirectories with doc counts — use those to navigate deeper. Metadata only — use aju_read for full content. Useful to explore what memories / notes exist in a section.",
     {
       directory: z
         .string()
         .optional()
-        .describe("Directory path prefix (e.g. 'journal'). Omit to list the whole brain."),
+        .describe(
+          "Directory to list (e.g. 'journal'). Matches documents directly in this directory; subfolders are returned separately. Omit to list the whole brain.",
+        ),
       brain: z.string().optional().describe("Brain name. Omit for default."),
     },
     async ({ directory, brain }) => {
@@ -100,8 +107,9 @@ export function registerVaultTools(server: McpServer, ctx: McpToolContext): void
           { organizationId, userId: ctx.userId, agentId: ctx.agentId },
           async ({ tx }) => {
             const b = await resolveBrainForTool(tx, ctx, brain);
+            const dir = directory ? normalizeDirectory(directory) : "";
             const where: Record<string, unknown> = { brainId: b.brainId };
-            if (directory) where.directory = directory;
+            if (dir) where.directory = dir;
             const docs = await tx.vaultDocument.findMany({
               where,
               select: {
@@ -118,10 +126,12 @@ export function registerVaultTools(server: McpServer, ctx: McpToolContext): void
               orderBy: { path: "asc" },
               take: 500,
             });
+            const subdirectories = await listSubdirectories(tx, b.brainId, dir);
             return textResult({
               brain: b.brainName,
-              directory: directory ?? null,
+              directory: dir || null,
               count: docs.length,
+              subdirectories,
               documents: docs.map((d) => ({
                 path: d.path,
                 title: d.title,

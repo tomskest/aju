@@ -17,7 +17,13 @@ import { Prisma } from "@prisma/client-tenant";
 import type { Prisma as PrismaTenant } from "@prisma/client-tenant";
 import { z } from "zod";
 import { withTenant } from "@/lib/tenant";
-import { parseDocument, scheduleRebuildLinks, threeWayMerge } from "@/lib/vault";
+import {
+  listSubdirectories,
+  normalizeDirectory,
+  parseDocument,
+  scheduleRebuildLinks,
+  threeWayMerge,
+} from "@/lib/vault";
 import { buildValidationSqlFilter, DEFAULT_RANK_WEIGHTS } from "@/lib/vault/validation-filter";
 import { generateEmbedding, toVectorLiteral, updateDocumentEmbedding } from "@/lib/embeddings";
 import { vaultPathSchema } from "@/lib/validators";
@@ -116,13 +122,14 @@ export function agentToolDefinitions(allowed: readonly AgentToolName[]): Anthrop
     browse: {
       name: "browse",
       description:
-        "List documents under a directory prefix (metadata only). Use to check whether a capture for a thread already exists under slack/<channel>/.",
+        "List documents in a directory (metadata only), plus its immediate subdirectories with doc counts — use those to navigate deeper. Use to check whether a capture for a thread already exists under slack/<channel>/.",
       input_schema: {
         type: "object",
         properties: {
           directory: {
             type: "string",
-            description: "Directory prefix, e.g. 'slack/general'. Omit for all.",
+            description:
+              "Directory to list, e.g. 'slack/general'. Matches documents directly in it; subfolders are returned separately. Omit for all.",
           },
           brain: {
             type: "string",
@@ -447,8 +454,9 @@ async function toolBrowse(
     { organizationId: ctx.organizationId, agentId: ctx.agentId },
     async ({ tx }) => {
       const b = await resolveGrantedBrain(tx, ctx, input.brain);
+      const dir = input.directory ? normalizeDirectory(input.directory) : "";
       const where: Prisma.VaultDocumentWhereInput = { brainId: b.brainId };
-      if (input.directory) where.directory = input.directory;
+      if (dir) where.directory = dir;
       const docs = await tx.vaultDocument.findMany({
         where,
         select: {
@@ -461,9 +469,10 @@ async function toolBrowse(
         orderBy: { path: "asc" },
         take: 200,
       });
+      const subdirectories = await listSubdirectories(tx, b.brainId, dir);
       return JSON.stringify({
         brain: b.brainName,
-        directory: input.directory ?? null,
+        directory: dir || null,
         count: docs.length,
         documents: docs.map((d) => ({
           path: d.path,
@@ -472,6 +481,7 @@ async function toolBrowse(
           tags: d.tags,
           updatedAt: d.updatedAt.toISOString(),
         })),
+        subdirectories,
       });
     },
   );

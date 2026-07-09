@@ -1,11 +1,17 @@
-import { resolveBrain, isBrainError } from "@/lib/vault";
+import {
+  resolveBrain,
+  isBrainError,
+  listSubdirectories,
+  normalizeDirectory,
+} from "@/lib/vault";
 import { authedTenantRoute } from "@/lib/route-helpers";
 
 export const GET = authedTenantRoute(async ({ req, tx, principal }) => {
   const brain = await resolveBrain(tx, req, principal);
   if (isBrainError(brain)) return brain;
 
-  const directory = req.nextUrl.searchParams.get("directory");
+  const rawDirectory = req.nextUrl.searchParams.get("directory");
+  const directory = rawDirectory ? normalizeDirectory(rawDirectory) : null;
   const section = req.nextUrl.searchParams.get("section");
   const rawLimit = req.nextUrl.searchParams.get("limit");
   const limit = Math.min(
@@ -41,9 +47,16 @@ export const GET = authedTenantRoute(async ({ req, tx, principal }) => {
   const docs = hasMore ? rows.slice(0, limit) : rows;
   const nextCursor = hasMore ? docs[docs.length - 1].path : null;
 
+  const subdirectories = await listSubdirectories(
+    tx,
+    brain.brainId,
+    directory ?? section ?? "",
+  );
+
   return {
     count: docs.length,
     documents: docs,
+    subdirectories,
     nextCursor,
   };
 });

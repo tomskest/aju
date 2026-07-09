@@ -42,8 +42,14 @@ type updateConflictBody struct {
 }
 
 type browseResponse struct {
-	Count     int                     `json:"count"`
-	Documents []browseResponseDocItem `json:"documents"`
+	Count          int                        `json:"count"`
+	Documents      []browseResponseDocItem    `json:"documents"`
+	Subdirectories []browseResponseSubdirItem `json:"subdirectories"`
+}
+
+type browseResponseSubdirItem struct {
+	Path     string `json:"path"`
+	DocCount int    `json:"docCount"`
 }
 
 type browseResponseDocItem struct {
@@ -136,7 +142,7 @@ func Browse(args []string) error {
 	fs := flag.NewFlagSet("browse", flag.ContinueOnError)
 	brain := fs.String("brain", "", "brain name (defaults to active brain)")
 	setLeafUsage(fs, leafHelp{
-		Summary: "List notes under a directory. With no <dir>, lists the brain root.",
+		Summary: "List notes and subfolders under a directory. With no <dir>, lists the brain root.",
 		Usage:   "aju browse [<dir>] [--brain <name>]",
 		Examples: []string{
 			"aju browse",
@@ -149,7 +155,9 @@ func Browse(args []string) error {
 	}
 	dir := ""
 	if fs.NArg() >= 1 {
-		dir = fs.Arg(0)
+		// Stored directories never carry leading/trailing slashes; the server
+		// matches exactly, so "engineering/plans/" would return nothing.
+		dir = strings.Trim(fs.Arg(0), "/")
 	}
 
 	client, cfg, err := loadAuthedClient()
@@ -167,9 +175,18 @@ func Browse(args []string) error {
 	if err := client.GetJSON("/api/vault/browse", params, &resp); err != nil {
 		return printFriendlyErr(err)
 	}
-	if resp.Count == 0 || len(resp.Documents) == 0 {
+	if len(resp.Documents) == 0 && len(resp.Subdirectories) == 0 {
 		fmt.Fprintln(os.Stderr, "No documents.")
 		return nil
+	}
+	// Subfolders first, marked with a trailing slash — a directory holding
+	// only subfolders would otherwise look empty.
+	for _, sd := range resp.Subdirectories {
+		label := "docs"
+		if sd.DocCount == 1 {
+			label = "doc"
+		}
+		fmt.Printf("%s/\t(%d %s)\n", sd.Path, sd.DocCount, label)
 	}
 	for _, d := range resp.Documents {
 		title := d.Title

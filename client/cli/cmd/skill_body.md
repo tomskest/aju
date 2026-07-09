@@ -78,8 +78,10 @@ Every example below shows `--profile <name>` because every brain-touching call r
 aju search "<keyword>" --profile <name>            # fast FTS keyword search with snippets
 aju semantic "<natural phrasing>" --profile <name> # meaning-based, catches paraphrases
 aju deep-search "<question>" --profile <name>      # GraphRAG: hybrid seeds + 1–2 hop graph expansion
-aju browse <dir> --profile <name>                  # list docs under a directory prefix
+aju browse [<dir>] --profile <name>                # list docs + subfolders in a directory
 ```
+
+**Navigating with `browse`.** It lists the documents directly in `<dir>` plus its immediate subfolders with doc counts (e.g. `engineering/plans/	(6 docs)`) — recurse into a subfolder path to go deeper. Leading/trailing slashes are tolerated (`engineering/plans/` ≡ `engineering/plans`). Omit `<dir>` to list the whole brain. Don't guess deep paths from memory — browse from the root or a known folder and follow the subfolder hints.
 
 **Preferred default: run `search` and `semantic` in parallel in a single tool call.** Keyword and meaning-based retrieval catch different things — running both costs ~200ms total but avoids missed hits from paraphrasing. Merge the results, dedupe by path, pick the best.
 
