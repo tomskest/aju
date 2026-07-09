@@ -28,19 +28,26 @@ vi.mock("@/lib/tenant", () => tenantContextMock);
 // The handler imports these but aju_browse never reaches them. Mock with
 // harmless stubs so module init doesn't pull in the real network / DB code.
 vi.mock("@/lib/embeddings", () => ({
-  generateEmbedding: vi.fn(),
-  toVectorLiteral: vi.fn(),
-}));
-vi.mock("@/lib/vault", () => ({
-  parseDocument: vi.fn(),
-}));
-vi.mock("@/lib/vault", () => ({
-  rebuildLinks: vi.fn(),
-  scheduleRebuildLinks: vi.fn(() => Promise.resolve()),
-}));
-vi.mock("@/lib/embeddings", () => ({
   updateDocumentEmbedding: vi.fn(),
 }));
+// Mock the vault barrel wholesale (it pulls in DB / network modules), but keep
+// the pure helpers the browse handler actually runs — normalizeDirectory and
+// listSubdirectories — real, imported straight from their source files.
+vi.mock("@/lib/vault", async () => {
+  const { normalizeDirectory } = await vi.importActual<
+    typeof import("@/lib/vault/parse")
+  >("@/lib/vault/parse");
+  const { listSubdirectories } = await vi.importActual<
+    typeof import("@/lib/vault/browse")
+  >("@/lib/vault/browse");
+  return {
+    normalizeDirectory,
+    listSubdirectories,
+    parseDocument: vi.fn(),
+    threeWayMerge: vi.fn(),
+    scheduleRebuildLinks: vi.fn(() => Promise.resolve()),
+  };
+});
 
 // ── Helpers ─────────────────────────────────────────────
 
@@ -110,6 +117,7 @@ describe("registerAjuTools → aju_browse", () => {
       },
       vaultDocument: {
         findMany: vi.fn().mockResolvedValue(docs),
+        groupBy: vi.fn().mockResolvedValue([]),
       },
     };
 
@@ -149,11 +157,13 @@ describe("registerAjuTools → aju_browse", () => {
       brain: string;
       directory: string | null;
       count: number;
+      subdirectories: Array<{ path: string; docCount: number }>;
       documents: Array<{ path: string }>;
     };
     expect(payload.brain).toBe("Personal");
     expect(payload.directory).toBe("journal");
     expect(payload.count).toBe(1);
+    expect(payload.subdirectories).toEqual([]);
     expect(payload.documents[0].path).toBe("journal/2026-04-16.md");
 
     expect(fakeTx.vaultDocument.findMany).toHaveBeenCalledWith(
