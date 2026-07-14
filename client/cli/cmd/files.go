@@ -2,17 +2,13 @@ package cmd
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"mime"
-	"mime/multipart"
 	"net/http"
-	"net/textproto"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -59,20 +55,22 @@ type filesReadResp struct {
 // presignUploadResp mirrors POST /api/vault/files/presign-upload.
 type presignUploadResp struct {
 	UploadURL string            `json:"uploadUrl"`
-	Key       string            `json:"key"`
-	Fields    map[string]string `json:"fields,omitempty"`
+	Key       string            `json:"s3Key"`
+	Headers   map[string]string `json:"headers,omitempty"`
 }
 
-// confirmUploadResp mirrors POST /api/vault/files/confirm-upload.
+// confirmUploadResp mirrors POST /api/vault/files/confirm-upload, which
+// returns the created VaultFile record.
 type confirmUploadResp struct {
-	Key      string `json:"key,omitempty"`
+	Key      string `json:"s3Key,omitempty"`
 	Filename string `json:"filename,omitempty"`
 	ID       string `json:"id,omitempty"`
 }
 
-// uploadResp mirrors POST /api/vault/files/upload (multipart fallback).
+// uploadResp mirrors POST /api/vault/files/upload (base64 JSON fallback),
+// which returns the created VaultFile record.
 type uploadResp struct {
-	Key      string `json:"key,omitempty"`
+	Key      string `json:"s3Key,omitempty"`
 	Filename string `json:"filename,omitempty"`
 	ID       string `json:"id,omitempty"`
 }
@@ -224,7 +222,7 @@ func FilesRead(args []string) error {
 }
 
 // FilesUpload implements `aju files upload <local-path>`. Prefers the
-// presign → PUT → confirm flow; falls back to multipart upload if the
+// presign → PUT → confirm flow; falls back to a base64 JSON upload if the
 // presign endpoint isn't available (HTTP 404).
 func FilesUpload(args []string) error {
 	fs := flag.NewFlagSet("files upload", flag.ContinueOnError)
@@ -234,7 +232,7 @@ func FilesUpload(args []string) error {
 	setLeafUsage(fs, leafHelp{
 		Summary: "Upload a local file to a brain. Prefers presign → PUT → confirm.",
 		Usage:   "aju files upload <local-path> [--brain <name>] [--category <c>] [--tags a,b,c]",
-		Long:    "Falls back to a multipart POST when the server lacks the presign endpoint.",
+		Long:    "Falls back to a base64 JSON POST when the server lacks the presign endpoint.",
 		Examples: []string{
 			"aju files upload ./diagram.png",
 			"aju files upload ./diagram.png --category diagrams --tags design,q2",
@@ -273,13 +271,15 @@ func FilesUpload(args []string) error {
 		fmt.Printf("Uploaded %s (key: %s)\n", filename, key)
 		return nil
 	}
-	// Only fall back for 404; other errors (auth, network, 5xx) surface.
+	// Only fall back for 404 — a 404 means the server predates the presign
+	// endpoint. Other statuses (400/401/409/413/5xx) are real errors and must
+	// surface; retrying them against /upload would fail the same way.
 	if !isNotFound(err) {
 		return printFriendlyErr(err)
 	}
 
-	// Fallback: multipart POST /api/vault/files/upload.
-	key, err = multipartUpload(client, brainName, localPath, filename, mimeType, *category, tags)
+	// Fallback: base64 JSON POST /api/vault/files/upload.
+	key, err = base64Upload(client, brainName, localPath, filename, mimeType, *category, tags)
 	if err != nil {
 		return printFriendlyErr(err)
 	}
@@ -326,7 +326,7 @@ func FilesDelete(args []string) error {
 		}
 	}
 
-	body := map[string]any{"key": key}
+	body := map[string]any{"key": key, "source": "aju-cli"}
 	target := "/api/vault/files/delete"
 	if b := resolveBrainFlag(*brain, cfg); b != "" {
 		body["brain"] = b
@@ -343,12 +343,13 @@ func FilesDelete(args []string) error {
 
 // tryPresignFlow attempts presign → PUT → confirm. Returns the final s3 key
 // on success. Callers check isNotFound on error to decide whether to fall
-// back to the multipart upload path.
+// back to the base64 JSON upload path.
 func tryPresignFlow(client *httpx.Client, brain, localPath, filename, mimeType string, size int64, category string, tags []string) (string, error) {
 	presignBody := map[string]any{
-		"filename":  filename,
-		"mimeType":  mimeType,
-		"sizeBytes": size,
+		"filename":    filename,
+		"contentType": mimeType,
+		"sizeBytes":   size,
+		"source":      "aju-cli",
 	}
 	presignTarget := "/api/vault/files/presign-upload"
 	if brain != "" {
@@ -376,7 +377,7 @@ func tryPresignFlow(client *httpx.Client, brain, localPath, filename, mimeType s
 	}
 	req.ContentLength = size
 	req.Header.Set("Content-Type", mimeType)
-	for k, v := range presign.Fields {
+	for k, v := range presign.Headers {
 		req.Header.Set(k, v)
 	}
 
@@ -397,10 +398,11 @@ func tryPresignFlow(client *httpx.Client, brain, localPath, filename, mimeType s
 	}
 
 	confirmBody := map[string]any{
-		"key":       presign.Key,
-		"filename":  filename,
-		"mimeType":  mimeType,
-		"sizeBytes": size,
+		"s3Key":       presign.Key,
+		"filename":    filename,
+		"contentType": mimeType,
+		"sizeBytes":   size,
+		"source":      "aju-cli",
 	}
 	if category != "" {
 		confirmBody["category"] = category
@@ -424,87 +426,39 @@ func tryPresignFlow(client *httpx.Client, brain, localPath, filename, mimeType s
 	return presign.Key, nil
 }
 
-// multipartUpload posts the file to /api/vault/files/upload as multipart form
-// data. Used as a fallback when the presign endpoint isn't available.
-func multipartUpload(client *httpx.Client, brain, localPath, filename, mimeType, category string, tags []string) (string, error) {
-	f, err := os.Open(localPath)
+// base64Upload posts the file to /api/vault/files/upload as a JSON body with
+// base64-encoded content. Used as a fallback when the presign endpoint isn't
+// available (older servers that 404 on presign-upload). The route reads a JSON
+// body — {filename, base64Content, contentType, source} — not multipart form
+// data.
+func base64Upload(client *httpx.Client, brain, localPath, filename, mimeType, category string, tags []string) (string, error) {
+	data, err := os.ReadFile(localPath)
 	if err != nil {
-		return "", fmt.Errorf("open %s: %w", localPath, err)
-	}
-	defer f.Close()
-
-	var buf bytes.Buffer
-	w := multipart.NewWriter(&buf)
-
-	// file part — set Content-Type explicitly on the part header.
-	hdr := make(textproto.MIMEHeader)
-	hdr.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file"; filename=%q`, filename))
-	hdr.Set("Content-Type", mimeType)
-	part, err := w.CreatePart(hdr)
-	if err != nil {
-		return "", fmt.Errorf("multipart create file part: %w", err)
-	}
-	if _, err := io.Copy(part, f); err != nil {
-		return "", fmt.Errorf("multipart copy file: %w", err)
+		return "", fmt.Errorf("read %s: %w", localPath, err)
 	}
 
+	body := map[string]any{
+		"filename":      filename,
+		"base64Content": base64.StdEncoding.EncodeToString(data),
+		"contentType":   mimeType,
+		"source":        "aju-cli",
+	}
 	if category != "" {
-		if err := w.WriteField("category", category); err != nil {
-			return "", err
-		}
+		body["category"] = category
 	}
 	if len(tags) > 0 {
-		if err := w.WriteField("tags", strings.Join(tags, ",")); err != nil {
-			return "", err
-		}
-	}
-	if err := w.Close(); err != nil {
-		return "", fmt.Errorf("multipart close: %w", err)
+		body["tags"] = tags
 	}
 
-	target := client.BaseURL + "/api/vault/files/upload"
+	target := "/api/vault/files/upload"
 	if brain != "" {
+		body["brain"] = brain
 		target += "?brain=" + url.QueryEscape(brain)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, target, &buf)
-	if err != nil {
-		return "", fmt.Errorf("build multipart request: %w", err)
-	}
-	req.Header.Set("Content-Type", w.FormDataContentType())
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("x-aju-cli-version", httpx.Version)
-	if client.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+client.APIKey)
-	}
-
-	resp, err := client.HTTP.Do(req)
-	if err != nil {
-		return "", &httpx.Error{Kind: httpx.ErrNetwork, Message: fmt.Sprintf("network: %v", err), Err: err}
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", &httpx.Error{Kind: httpx.ErrNetwork, Message: fmt.Sprintf("read response: %v", err), Err: err}
-	}
-	if resp.StatusCode >= 400 {
-		snippet := strings.TrimSpace(string(raw))
-		if len(snippet) > 256 {
-			snippet = snippet[:256] + "..."
-		}
-		return "", &httpx.Error{
-			Kind:    httpx.ErrHTTP,
-			Status:  resp.StatusCode,
-			Message: fmt.Sprintf("http %d: %s", resp.StatusCode, snippet),
-			Body:    snippet,
-		}
-	}
-
 	var out uploadResp
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &out); err != nil {
-			return "", &httpx.Error{Kind: httpx.ErrDecode, Message: fmt.Sprintf("decode response: %v", err), Err: err}
-		}
+	if err := client.PostJSON(target, body, &out); err != nil {
+		return "", err
 	}
 	if out.Key != "" {
 		return out.Key, nil
@@ -546,7 +500,7 @@ func detectMime(path string) string {
 }
 
 // isNotFound reports whether err is an httpx HTTP 404, used to decide whether
-// to fall back to the multipart upload path.
+// to fall back to the base64 JSON upload path.
 func isNotFound(err error) bool {
 	var e *httpx.Error
 	if !errors.As(err, &e) {
