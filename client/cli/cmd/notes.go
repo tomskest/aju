@@ -67,12 +67,15 @@ type browseResponseDocItem struct {
 func Read(args []string) error {
 	fs := flag.NewFlagSet("read", flag.ContinueOnError)
 	brain := fs.String("brain", "", "brain name (defaults to active brain)")
+	resolve := fs.Bool("resolve", false, "resolve live ```aju-query``` blocks into tables (read-only view; not for editing)")
 	setLeafUsage(fs, leafHelp{
 		Summary: "Read a note (frontmatter + body) from a brain.",
-		Usage:   "aju read <path> [--brain <name>]",
+		Usage:   "aju read <path> [--brain <name>] [--resolve]",
+		Long:    "Default prints the raw source (edit mode). --resolve renders live ```aju-query``` blocks as tables (results mode); resolved output is display-only and is not cached for `aju update`.",
 		Examples: []string{
 			"aju read journal/2026-04-22-morning.md",
 			"aju read 03-Product/okrs.md --brain Acme",
+			"aju read collab/board.md --resolve",
 		},
 	})
 	if err := parseFlags(fs, args); err != nil {
@@ -91,6 +94,9 @@ func Read(args []string) error {
 	params := url.Values{}
 	params.Set("path", path)
 	addBrain(params, resolveBrainFlag(*brain, cfg))
+	if *resolve {
+		params.Set("resolve", "1")
+	}
 
 	var doc documentResponse
 	if err := client.GetJSON("/api/vault/document", params, &doc); err != nil {
@@ -115,7 +121,11 @@ func Read(args []string) error {
 	// Stash (hash, content) so the next `aju update` of the same path can
 	// populate baseHash + baseContent automatically. Cache is keyed by
 	// (profile, brain, path) to keep cross-org state isolated.
-	if doc.ContentHash != "" {
+	//
+	// Never cache under --resolve: the content here is the rendered view, not
+	// the stored source. Caching it would let a later `aju update` write the
+	// resolved tables back over the ```aju-query``` blocks and destroy them.
+	if doc.ContentHash != "" && !*resolve {
 		stashReadCache(cfg, resolveBrainFlag(*brain, cfg), path, doc.ContentHash, doc.Content)
 	}
 	return nil

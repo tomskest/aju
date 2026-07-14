@@ -3,6 +3,7 @@ import { prisma, tenantDbFor } from "@/lib/db";
 import { currentUser, getActiveOrganizationId } from "@/lib/auth";
 import { withBrainContext } from "@/lib/tenant";
 import { renderMarkdown, resolveWikilinksToMarkdown } from "@/lib/vault";
+import { resolveDocumentContent } from "@/lib/vault/query-block";
 import BrainExplorer from "@/components/app/brain/BrainExplorer";
 
 export const dynamic = "force-dynamic";
@@ -119,8 +120,18 @@ export default async function BrainPage(props: PageProps) {
             row.content,
             row.title,
           );
-          const md = resolveWikilinksToMarkdown(
+          // Resolve live ```aju-query``` blocks into markdown tables. Runs
+          // before wikilink resolution so the `[[..]]` links the tables emit
+          // become clickable, and before render so marked turns them into
+          // HTML tables. Display-only — `content` below stays the raw source
+          // for the editor / CAS, so a save never overwrites the query block.
+          const resolvedBody = await resolveDocumentContent(
+            tx,
+            [brain.id],
             displayBody,
+          );
+          const md = resolveWikilinksToMarkdown(
+            resolvedBody,
             knownPaths,
             brain.name,
             row.path,

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { resolveBrain, isBrainError } from "@/lib/vault";
+import { resolveDocumentContent } from "@/lib/vault/query-block";
 import { authedTenantRoute } from "@/lib/route-helpers";
 
 export const GET = authedTenantRoute(async ({ req, tx, principal }) => {
@@ -23,6 +24,20 @@ export const GET = authedTenantRoute(async ({ req, tx, principal }) => {
       { error: `Document not found: ${path}` },
       { status: 404 },
     );
+  }
+
+  // Opt-in, display-only resolution of ```aju-query``` blocks. We return the
+  // rendered content but keep the raw `contentHash` untouched so edit / update
+  // / CAS keep operating on the stored source — resolution must never feed a
+  // write path. Callers that intend to edit must NOT pass resolve.
+  const resolve = req.nextUrl.searchParams.get("resolve");
+  if (resolve === "1" || resolve === "true") {
+    const content = await resolveDocumentContent(
+      tx,
+      [brain.brainId],
+      doc.content,
+    );
+    return { ...doc, content, resolved: true };
   }
 
   return doc;
