@@ -139,10 +139,8 @@ describe("resolveDocumentContent (no DB paths)", () => {
 });
 
 describe("web render composition (table markdown → HTML)", () => {
-  it("renders a query table through the page pipeline into an HTML table", () => {
+  it("renders a query table with a clickable wikilink through the page pipeline", () => {
     // Mirrors page.tsx: renderQueryResult → resolveWikilinks → renderMarkdown.
-    // (The brain explorer's renderMarkdown strips raw <a>, so the linked item
-    // title comes through as text — same as every other wikilink there today.)
     const table = renderQueryResult([row({})], {
       columns: ["title", "status"],
     });
@@ -156,7 +154,33 @@ describe("web render composition (table markdown → HTML)", () => {
     expect(html).toContain("<table>");
     expect(html).toContain("<th>Title</th>");
     expect(html).toContain("<th>Status</th>");
-    expect(html).toContain("A handoff");
+    // The item title is now a real clickable wikilink, not stripped to text.
+    expect(html).toContain(
+      '<a href="/app/brain/Crewpoint/collab/handoffs/a.md" class="wikilink">A handoff</a>',
+    );
     expect(html).toContain("OPEN");
+  });
+
+  it("keeps a dangling wikilink clickable with the missing class", () => {
+    const md = resolveWikilinksToMarkdown(
+      "See [[collab/handoffs/gone|Gone]].",
+      ["collab/handoffs/a.md"],
+      "Crewpoint",
+      "collab/board.md",
+    );
+    const html = renderMarkdown(md);
+    expect(html).toContain('class="wikilink wikilink-missing"');
+    expect(html).toContain("?missing=");
+    expect(html).toContain(">Gone</a>");
+  });
+
+  it("still strips scripts and hand-written anchors (no injection)", () => {
+    const html = renderMarkdown(
+      'Hi <script>alert(1)</script> <a href="https://evil.test" onclick="x()">bad</a>',
+    );
+    expect(html).not.toContain("<script>");
+    expect(html).not.toContain("onclick");
+    expect(html).not.toContain("evil.test");
+    expect(html).not.toContain("<a ");
   });
 });
