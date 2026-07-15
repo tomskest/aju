@@ -135,9 +135,36 @@ aju validation status <path> --profile <name>   # show current state + history
 ## Reading a document
 
 ```bash
-aju read <path> --profile <name>          # prints frontmatter + body
-aju read <path> --json --profile <name>   # machine-readable form
+aju read <path> --profile <name>            # prints frontmatter + body
+aju read <path> --json --profile <name>     # machine-readable form
+aju read <path> --resolve --profile <name>  # render live aju-query blocks as tables (see "Live views")
 ```
+
+## Live views (aju-query blocks)
+
+Embed an `aju-query` fenced block in any note to render a live table of other docs, filtered from their frontmatter. `aju read <path> --resolve` (and the web app) turn the block into a markdown table on read; plain `aju read` shows the raw block (edit mode). Resolution is **display-only** — the stored note keeps the query, so `aju update` never overwrites it with the rendered table. Use it for indexes that must stay current on their own — a status board, a "what's still open" list — instead of tables you maintain by hand.
+
+The block body is YAML; every key is optional:
+
+```aju-query
+from: tasks                     # limit to a directory (prefix match)
+where:
+  status: [OPEN, IN_PROGRESS]   # doc_status (frontmatter `status:`) — matches any in the list
+  tags: [task]                  # frontmatter `tags:` — has ANY of these
+  type: note                    # doc_type (frontmatter `type:`)
+  owner: sam                    # any other key matches that frontmatter field
+columns: [created, item, status, owner]
+sort: created desc
+limit: 50
+as: table
+```
+
+- **`where` filters** — `status`, `type`, `tags` hit promoted columns; any other key matches a frontmatter field. Value is a scalar or a list (a list means "matches any of").
+- **`columns`** — built-ins: `item`/`title` (a clickable `[[wikilink]]` to the doc), `status`, `type`, `path`, `tags`, `created`, `updated`. Any other name is read from that doc's frontmatter. Default `[title, status]`.
+- **`sort`** — `<field> asc|desc`. Built-in fields: `created`, `updated`, `title`, `status`, `type`, `path`; any other sorts by that frontmatter field. Default `created desc`.
+- **`limit`** default 50 (max 500). **`as`** is `table` (default) or `list`. **Scope** is the note's own brain; filter-only — no search text needed.
+
+Rows come straight from each target doc's frontmatter, so a status board is single-source-of-truth: flip a doc's `status:` and the view updates; done items fall out of an `OPEN/IN_PROGRESS` filter on their own.
 
 ## Writing new memory
 
