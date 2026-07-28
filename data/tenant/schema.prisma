@@ -230,6 +230,10 @@ model VaultChangeLog {
   @@index([brainId])
   @@index([source, createdAt])
   @@index([createdAt])
+  // Serves GET /api/vault/changes: filter brain_id + range/sort on created_at
+  // in one index scan (siblings vault_document_versions / vault_validation_log
+  // already carry the same (brain_id, …, created_at) shape).
+  @@index([brainId, createdAt])
   @@map("vault_change_log")
 }
 

@@ -36,6 +36,7 @@ export const GET = authedTenantRoute(async ({ req, tx, principal }) => {
       tx,
       [brain.brainId],
       doc.content,
+      { path: doc.path },
     );
     return { ...doc, content, resolved: true };
   }

@@ -129,6 +129,7 @@ export default async function BrainPage(props: PageProps) {
             tx,
             [brain.id],
             displayBody,
+            { path: row.path },
           );
           const md = resolveWikilinksToMarkdown(
             resolvedBody,

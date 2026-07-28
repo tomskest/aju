@@ -128,13 +128,23 @@ describe("resolveDocumentContent (no DB paths)", () => {
     expect(await resolveDocumentContent(fakeTx, ["b1"], content)).toBe(content);
   });
 
-  it("replaces a malformed block with an inline notice, not an error", async () => {
+  it("replaces a malformed block with a sanitized inline notice, not an error", async () => {
     const content = "before\n\n```aju-query\nwhere: [bad: yaml:\n```\n\nafter";
     const out = await resolveDocumentContent(fakeTx, ["b1"], content);
     expect(out).toContain("before");
     expect(out).toContain("after");
-    expect(out).toContain("⚠️ aju-query");
+    expect(out).toContain("could not parse this query block");
     expect(out).not.toContain("```aju-query");
+  });
+
+  it("sanitizes resolve errors — raw error text never lands in the doc", async () => {
+    // Valid block, but fakeTx has no $queryRaw → resolveQuery throws. The
+    // "is not a function" detail must be logged server-side, not rendered.
+    const content = "```aju-query\nwhere:\n  status: OPEN\n```";
+    const out = await resolveDocumentContent(fakeTx, ["b1"], content);
+    expect(out).toContain("could not resolve this query");
+    expect(out).not.toContain("$queryRaw");
+    expect(out).not.toMatch(/is not a function/);
   });
 });
 

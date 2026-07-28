@@ -1,6 +1,9 @@
 import matter from "gray-matter";
 import { Prisma } from "@prisma/client-tenant";
+import { logger as baseLogger } from "@/lib/logger";
 import { normalizeDirectory } from "./parse";
+
+const log = baseLogger.child({ area: "query-block" });
 
 /**
  * Live query blocks — an embeddable ```aju-query``` fence whose YAML body
@@ -261,22 +264,38 @@ export async function resolveDocumentContent(
   tx: Prisma.TransactionClient,
   brainIds: string[],
   content: string,
+  ctx: { path?: string } = {},
 ): Promise<string> {
   const blocks = findQueryBlocks(content);
   if (blocks.length === 0) return content;
 
   let out = content;
-  for (const b of [...blocks].reverse()) {
+  // Splice back-to-front so earlier offsets stay valid; `i` is the block's
+  // source-order index, carried into logs. Failures are logged (area
+  // "query-block") and shown to the reader as a generic notice — the raw
+  // parser / SQL error goes to the server log, not into the rendered note.
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const b = blocks[i];
     let replacement: string;
     if (b.error || !b.spec) {
-      replacement = `> ⚠️ aju-query: ${b.error ?? "invalid query"}`;
+      log.warn(
+        { brainId: brainIds[0], path: ctx.path, block: i, err: b.error },
+        "aju-query block failed to parse",
+      );
+      replacement =
+        "> ⚠️ aju-query: could not parse this query block (see server logs).";
     } else {
       try {
         const rows = await resolveQuery(tx, brainIds, b.spec);
         replacement = renderQueryResult(rows, b.spec);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        replacement = `> ⚠️ aju-query error: ${msg}`;
+        log.warn(
+          { brainId: brainIds[0], path: ctx.path, block: i, spec: b.spec, err: msg },
+          "aju-query block failed to resolve",
+        );
+        replacement =
+          "> ⚠️ aju-query: could not resolve this query (see server logs).";
       }
     }
     out = out.slice(0, b.start) + replacement + out.slice(b.end);
