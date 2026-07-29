@@ -100,17 +100,42 @@ type skillMeResp struct {
 
 // buildSkillContext fetches the caller's identity and accessible brains
 // so the skill template can be personalised. Returns sensible defaults if
-// the caller isn't authenticated or the server is unreachable.
+// no profile is signed in or the server is unreachable.
+//
+// This deliberately does NOT go through loadAuthedClient. `skill install`
+// writes a local file that describes *every* configured profile — it is not a
+// brain-touching call, so requireExplicitProfile must not gate it. Routing it
+// through loadAuthedClient made a fully-authenticated machine render the
+// "not signed in" fallback whenever `--profile` was omitted, because the
+// strict-profile guard fired before any credential was ever consulted.
+//
+// `--profile` remains meaningful here but optional: it pins which profile
+// supplies the identity line and the single-brain description fields. The
+// per-profile routing table is built from all profiles either way.
 func buildSkillContext() (skillContext, error) {
 	ctx := skillContext{
 		UserName:    "you",
 		ActiveBrain: "brain",
 	}
 
-	client, cfg, err := loadAuthedClient()
-	if err != nil {
+	cfg, err := config.Load()
+	if err != nil || cfg == nil {
 		return ctx, nil
 	}
+
+	ctx.ActiveProfile = cfg.Active
+	ctx.DefaultProfile = cfg.DefaultProfile
+	ctx.Profiles = collectSkillProfiles(cfg)
+
+	identity, identityName := identitySkillProfile(cfg)
+	if identity == nil {
+		return ctx, nil
+	}
+	server := identity.Server
+	if server == "" {
+		server = config.DefaultServer
+	}
+	client := httpx.New(server, identity.Key)
 
 	var me skillMeResp
 	if err := client.Get("/api/auth/me", &me); err == nil {
@@ -139,8 +164,9 @@ func buildSkillContext() (skillContext, error) {
 		}
 	}
 
-	if cfg != nil && cfg.Profile().Brain != "" {
-		ctx.ActiveBrain = cfg.Profile().Brain
+	ctx.ActiveProfile = identityName
+	if identity.Brain != "" {
+		ctx.ActiveBrain = identity.Brain
 	} else if len(ctx.Brains) > 0 {
 		ctx.ActiveBrain = ctx.Brains[0].Name
 	}
@@ -154,13 +180,48 @@ func buildSkillContext() (skillContext, error) {
 		ctx.FirstBrainExample = ctx.Brains[0].Name
 	}
 
-	if cfg != nil {
-		ctx.ActiveProfile = cfg.Active
-		ctx.DefaultProfile = cfg.DefaultProfile
-		ctx.Profiles = collectSkillProfiles(cfg)
-	}
-
 	return ctx, nil
+}
+
+// identitySkillProfile picks the profile whose credentials supply the rendered
+// skill's identity line and single-brain description fields, returning it with
+// its name. Precedence:
+//
+//  1. the profile named by `--profile`/$AJU_PROFILE, when it is signed in
+//  2. the configured default profile, when it is signed in
+//  3. the resolved active profile, when it is signed in
+//  4. the first signed-in profile in sorted order
+//
+// Returns (nil, "") when no profile holds an API key — the only case that
+// legitimately renders the "not signed in" fallback.
+func identitySkillProfile(cfg *config.Config) (*config.Profile, string) {
+	if cfg == nil {
+		return nil, ""
+	}
+	signedIn := func(name string) *config.Profile {
+		if name == "" {
+			return nil
+		}
+		if p, ok := cfg.Profiles[name]; ok && p != nil && p.Key != "" {
+			return p
+		}
+		return nil
+	}
+	for _, name := range []string{
+		strings.TrimSpace(os.Getenv("AJU_PROFILE")),
+		cfg.DefaultProfile,
+		cfg.Active,
+	} {
+		if p := signedIn(name); p != nil {
+			return p, name
+		}
+	}
+	for _, name := range cfg.ProfileNames() {
+		if p := signedIn(name); p != nil {
+			return p, name
+		}
+	}
+	return nil, ""
 }
 
 // collectSkillProfiles walks every locally-stored profile with a non-empty
@@ -306,12 +367,15 @@ Arguments:
   <tool>    supported target (e.g. 'claude'). Defaults to 'claude' when omitted.
 
 Flags:
-  --force   overwrite an existing skill file
+  --force            overwrite an existing skill file
+  --profile <name>   pin which profile supplies the identity line (optional —
+                     the routing table always covers every signed-in profile)
 
 Examples:
   aju skill install
   aju skill install claude
   aju skill install claude --force
+  aju skill install claude --force --profile work
 `)
 		return nil
 	}
@@ -348,21 +412,32 @@ Examples:
 	}
 
 	fmt.Printf("Installed %s skill at %s\n", target.label, path)
-	if ctx.UserEmail == "" {
-		fmt.Fprintf(os.Stderr, "Note: not signed in — skill installed with generic placeholders. Run `aju login` then `aju skill install %s --force` to personalise.\n", target.name)
-	} else {
-		fmt.Printf("Personalised for %s", ctx.UserName)
-		if ctx.UserEmail != "" {
-			fmt.Printf(" (%s)", ctx.UserEmail)
-		}
-		fmt.Printf(" · active brain: %s", ctx.ActiveBrain)
-		if len(ctx.Brains) > 1 {
-			fmt.Printf(" · %d brains total", len(ctx.Brains))
-		}
-		fmt.Println(".")
-		fmt.Printf("Re-run `aju skill install %s --force` after changing brains to refresh.\n", target.name)
+	if len(ctx.Profiles) == 0 {
+		fmt.Fprintf(os.Stderr, "Note: no signed-in profile found — skill installed with generic placeholders. Run `aju login --profile <name>` then `aju skill install %s --force` to personalise.\n", target.name)
+		return nil
 	}
+	fmt.Printf("Personalised for %s", ctx.UserName)
+	if ctx.UserEmail != "" {
+		fmt.Printf(" (%s)", ctx.UserEmail)
+	}
+	fmt.Printf(" · %d profile", len(ctx.Profiles))
+	if len(ctx.Profiles) != 1 {
+		fmt.Print("s")
+	}
+	fmt.Printf(" routed: %s", strings.Join(skillProfileNames(ctx.Profiles), ", "))
+	fmt.Println(".")
+	fmt.Printf("Re-run `aju skill install %s --force` after adding profiles or brains to refresh.\n", target.name)
 	return nil
+}
+
+// skillProfileNames lists the profile names written into the routing table,
+// so the install summary names exactly what the skill can now reach.
+func skillProfileNames(profiles []skillProfile) []string {
+	names := make([]string, 0, len(profiles))
+	for _, p := range profiles {
+		names = append(names, p.Name)
+	}
+	return names
 }
 
 // SkillRemove deletes the installed skill for a target (and empty parent dir).
