@@ -110,12 +110,23 @@ See `src/app/api/vault/create/route.ts`,
 Deletes log **before** deleting so the FK `SetNull` doesn't orphan the log
 prematurely.
 
-**Why not a full version history with prior content snapshots:** content
-is rewritten in place on update. The change log captures operation, actor,
-source, and timestamp — enough for audit — but not enough for "roll back to
-last Tuesday". That's a deliberate scope choice: aju is an agent memory
-backend, not a Git replacement. If you need content versioning, run your
-vault out of a Git repo and sync with the CLI.
+**The change log is not the version history.** It records that a mutation
+happened; `VaultDocumentVersion` records what the content was. Every
+create and update appends a version row carrying the full content, its
+hash, the parent hash, the source, the author, and an optional
+`message`.
+
+`message` is why the edit was made, supplied by the caller
+(`aju create|update --message`, the `message` field on
+`POST /api/vault/{create,update}`, or the `message` argument on the
+`aju_create` / `aju_update` MCP tools). Nothing derives it: an edit
+committed without one leaves the row null, and that version's reasoning
+is lost. It surfaces in `aju history`, in the web app's history panel,
+and above the diff view.
+
+Read the chain with `GET /api/vault/document/versions` (metadata,
+paginated) and `GET /api/vault/document/version?n=<N>|&hash=<hex>` (one
+version's full content).
 
 ## Reading changes: `/api/vault/changes`
 

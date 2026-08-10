@@ -213,20 +213,24 @@ func Browse(args []string) error {
 func Create(args []string) error {
 	fs := flag.NewFlagSet("create", flag.ContinueOnError)
 	brain := fs.String("brain", "", "brain name (defaults to active brain)")
+	message := fs.String("message", "", "why this document exists (recorded on the version row)")
 	setLeafUsage(fs, leafHelp{
 		Summary: "Create a note. Content is read from stdin.",
-		Usage:   "aju create <path> [--brain <name>]",
+		Usage:   "aju create <path> [--message <why>] [--brain <name>]",
 		Long: `Pipe content into stdin; running without a pipe is a user error and is
 rejected with a hint.
 
 Notes are markdown. Fenced ` + "```mermaid and ```bpmn" + ` (complete BPMN 2.0
 XML including the BPMNDiagram/DI layout section) code blocks render as
 diagrams in the web app — see aju.sh/kb/data/diagrams for a working
-skeleton.`,
+skeleton.
+
+--message records why the document exists. It is stored on the version
+row and shown in 'aju history' and in the web app's history panel.`,
 		Examples: []string{
 			"echo '# Hello' | aju create notes/hello.md",
 			"cat draft.md | aju create drafts/draft.md --brain Acme",
-			"cat booking-process.md | aju create processes/booking.md  # doc with a ```bpmn block",
+			"cat booking-process.md | aju create processes/booking.md --message 'initial model of the party booking flow'",
 		},
 	})
 	if err := parseFlags(fs, args); err != nil {
@@ -251,6 +255,9 @@ skeleton.`,
 		"path":    path,
 		"content": content,
 		"source":  "aju-cli",
+	}
+	if strings.TrimSpace(*message) != "" {
+		body["message"] = strings.TrimSpace(*message)
 	}
 	target := "/api/vault/create"
 	if b := resolveBrainFlag(*brain, cfg); b != "" {
@@ -284,9 +291,10 @@ func UpdateNote(args []string) error {
 	brain := fs.String("brain", "", "brain name (defaults to active brain)")
 	baseHash := fs.String("base-hash", "", "head hash of the version you're editing (from `aju read`)")
 	force := fs.Bool("force", false, "skip the compare-and-swap check (overwrite whatever is there)")
+	message := fs.String("message", "", "why this edit was made (recorded on the version row)")
 	setLeafUsage(fs, leafHelp{
 		Summary: "Update a note. Content is read from stdin.",
-		Usage:   "aju update <path> [--base-hash <hash>] [--force] [--brain <name>]",
+		Usage:   "aju update <path> [--message <why>] [--base-hash <hash>] [--force] [--brain <name>]",
 		Long: `Pipe content into stdin; running without a pipe is a user error and is
 rejected with a hint.
 
@@ -299,11 +307,17 @@ head; re-read, re-apply your edit, and retry.
 or --force the request falls back to legacy force-write and the server
 returns a Deprecation header.
 
+--message records why the edit was made. It is stored on the version
+row and shown in 'aju history' and next to the visual diff in the web
+app, which is what turns a version chain into a rationale trail. Always
+pass it when revising a ` + "```bpmn" + ` diagram.
+
 Fenced ` + "```mermaid and ```bpmn" + ` (BPMN 2.0 XML with DI) code blocks
 render as diagrams in the web app — see aju.sh/kb/data/diagrams.`,
 		Examples: []string{
 			"cat draft.md | aju update notes/hello.md --base-hash 9f3a...",
 			"cat draft.md | aju update notes/hello.md --force",
+			"cat booking.md | aju update processes/booking.md --base-hash 9f3a... --message 'preconditions must check visa expiry, not just passport'",
 		},
 	})
 	if err := parseFlags(fs, args); err != nil {
@@ -355,6 +369,9 @@ render as diagrams in the web app — see aju.sh/kb/data/diagrams.`,
 	}
 	if effectiveBaseContent != "" {
 		body["baseContent"] = effectiveBaseContent
+	}
+	if strings.TrimSpace(*message) != "" {
+		body["message"] = strings.TrimSpace(*message)
 	}
 	target := "/api/vault/update"
 	if resolvedBrain != "" {

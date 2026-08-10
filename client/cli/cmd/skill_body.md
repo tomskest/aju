@@ -209,6 +209,10 @@ Switched to voyage-4-large from text-embedding-3-small. Notes: [[2026-04-17-embe
 EOF
 ```
 
+### Recording why an edit happened
+
+Both `aju create` and `aju update` take `--message "<why>"`. It is stored on the version row, shown in `aju history` and in the web app's history panel, and is the only place the reasoning behind a change survives. Pass it on any edit a person would later ask "why did this change?" about, and always when revising a diagram.
+
 ### Deleting
 
 ```bash
@@ -217,6 +221,74 @@ aju delete <path> --yes --profile <name>      # skip confirmation
 ```
 
 Delete sparingly. Prefer archiving (move content to `archive/<path>.md`) if historical context might matter.
+
+## Revising a BPMN process diagram
+
+Process diagrams live as ` ```bpmn ` fences inside ordinary documents, so the document's version chain is already the diagram's version history, and the web app derives a visual diff between any two versions with bpmn-js-differ.
+
+That means: **never write a diff.** Write the next whole, valid version and let the app compute what changed. Do not invent a diff format, a "changes" block, or annotations describing the edit inside the XML.
+
+The usual trigger is the user marking up a screenshot of a rendered diagram (circles, arrows, crossings-out) and handing it to you.
+
+### 1. Read the current version, keep the hash
+
+```bash
+aju read processes/booking.md --profile <name>     # head hash is printed to stderr
+```
+
+Work from the XML in the fence, not from the picture. The screenshot says *what* the user wants changed; the XML says *which element ids* those marks land on.
+
+### 2. Propose a change list, then stop
+
+Before writing any XML, list the intended edits, one line each, naming the element id each one touches:
+
+```
+add    ServiceTask after Task_1   "Check visa expiry"
+rename Gateway_2                  "Anything blocking the party?" → "Anything blocking any passenger?"
+remove SequenceFlow Flow_7
+```
+
+Wait for confirmation. Handwriting is ambiguous, and a misread that gets baked into XML is expensive to find later. This list also becomes the commit message.
+
+### 3. Write the next version, whole and valid
+
+Emit the full document with the fence replaced. Two rules decide whether the resulting diff is readable or useless:
+
+- **Element ids are immutable.** The diff is keyed on `id`. Never renumber, never reuse. A rename keeps the id and changes only `name`; changing the id turns one rename into a delete plus an add, and the whole diagram reads as churn. New elements get new, previously unused ids.
+- **Preserve DI verbatim.** Copy every untouched `dc:Bounds` and `di:waypoint` exactly as it was. Compute coordinates only for elements you actually touched. A wholesale re-layout marks every element as moved and buries the real change.
+
+Then the rules that keep it renderable at all:
+
+- Every new flow node needs a `BPMNShape` and every new sequence flow a `BPMNEdge`. Missing DI parses fine and then silently fails to draw. The diff view flags this, but catch it yourself.
+- Events 36×36, gateways 50×50, tasks sized to their label: roughly 6px per character per line plus 20px padding, two lines maximum.
+- Inserting between two elements: shift the downstream shapes right by the new width plus the gap, and re-route only the edges touching the insert. Those shifts show up as "moved" in the diff and are de-emphasised there, which is expected rather than a mistake.
+- Keep one `bpmn:definitions` root containing both the process and the `bpmndi:BPMNDiagram` section.
+
+### 4. Commit the reason, not the change
+
+```bash
+cat revised.md | aju update processes/booking.md --profile <name> \
+  --base-hash <hash-from-step-1> \
+  --message "preconditions must check visa expiry, not just passport validity"
+```
+
+The diff already shows what changed. `--message` is the only place why it changed survives, so write the reason the process moved, not a restatement of the XML.
+
+### 5. Point the user at the diff
+
+In the web app: open the document, click `history`, pick a version, then the `diff` tab. Older version on the left, newer on the right, added in green, removed in red, changed in amber, moved in blue and collapsed by default. From the CLI:
+
+```bash
+aju history processes/booking.md --profile <name>              # versions, with their messages
+aju history processes/booking.md --version 3 --profile <name>  # a past version's full content
+```
+
+### Check before committing
+
+1. Every id that existed before still exists, spelled the same.
+2. Everything you added has DI, and everything you did not touch kept its original DI.
+3. The document still parses as one BPMN 2.0 definition with a DI section.
+4. `--message` says why.
 
 ## Graph navigation
 

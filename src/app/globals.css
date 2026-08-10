@@ -511,3 +511,295 @@ body {
   padding: 0 2px;
   border-radius: 2px;
 }
+
+/* ── BPMN version diff ──────────────────────────────────────
+ * Two live bpmn-js canvases side by side, marked up from a
+ * bpmn-js-differ result. Lives outside .kb-prose (it renders in the
+ * version history pane, not in document body markup), so the diagram
+ * chrome is restated here rather than inherited. */
+.bpmn-diff {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding: 0.85rem 0.85rem 1.6rem;
+  background: var(--color-panel);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+}
+
+.bpmn-diff-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.bpmn-diff-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.bpmn-diff-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+.bpmn-diff-legend-item[data-empty="true"] {
+  opacity: 0.35;
+}
+.bpmn-diff-legend-item i {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: currentColor;
+}
+.bpmn-diff-legend-added i {
+  color: #22c55e;
+}
+.bpmn-diff-legend-removed i {
+  color: #ef4444;
+}
+.bpmn-diff-legend-changed i {
+  color: #f59e0b;
+}
+.bpmn-diff-legend-layout i {
+  color: #60a5fa;
+}
+
+.bpmn-diff-controls {
+  display: flex;
+  gap: 0.35rem;
+}
+.bpmn-diff-controls button {
+  min-width: 2rem;
+  padding: 0.3rem 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  cursor: pointer;
+  transition:
+    color 0.18s ease,
+    border-color 0.18s ease;
+}
+.bpmn-diff-controls button:hover {
+  color: var(--color-ink);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+/* Stacked by default: process diagrams are far wider than they are tall,
+ * so full width per version reads better than two half-width columns. */
+.bpmn-diff-panes {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+}
+@media (min-width: 900px) {
+  .bpmn-diff-panes.is-columns {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.bpmn-diff-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0;
+  min-width: 0;
+}
+.bpmn-diff-pane figcaption {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--color-ink);
+}
+.bpmn-diff-pane figcaption span {
+  color: var(--color-faint);
+}
+
+.bpmn-diff-canvas {
+  height: 340px;
+  background: #08090b;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.bpmn-diff-canvas-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-faint);
+}
+.bpmn-diff-canvas .bjs-powered-by {
+  display: none;
+}
+
+/* Diff markers. `:nth-child(1)` inside .djs-visual is the element's main
+ * shape (rect, circle, polygon) or an edge's path — recolouring only that
+ * leaves labels and type icons legible. */
+.bpmn-diff-canvas .djs-element.bpmn-diff-added .djs-visual > :nth-child(1) {
+  stroke: #22c55e !important;
+  fill: rgba(34, 197, 94, 0.18) !important;
+  stroke-width: 2.5px !important;
+}
+.bpmn-diff-canvas .djs-element.bpmn-diff-removed .djs-visual > :nth-child(1) {
+  stroke: #ef4444 !important;
+  fill: rgba(239, 68, 68, 0.18) !important;
+  stroke-width: 2.5px !important;
+}
+.bpmn-diff-canvas .djs-element.bpmn-diff-changed .djs-visual > :nth-child(1) {
+  stroke: #f59e0b !important;
+  fill: rgba(245, 158, 11, 0.16) !important;
+  stroke-width: 2.5px !important;
+}
+.bpmn-diff-canvas .djs-element.bpmn-diff-layout .djs-visual > :nth-child(1) {
+  stroke: #60a5fa !important;
+  stroke-dasharray: 4 3 !important;
+}
+/* A connection's fill paints its arrowhead area, not a body — filling it
+ * the way a shape is filled turns the whole path into a blob. */
+.bpmn-diff-canvas .djs-connection.bpmn-diff-added .djs-visual > :nth-child(1),
+.bpmn-diff-canvas .djs-connection.bpmn-diff-removed .djs-visual > :nth-child(1),
+.bpmn-diff-canvas .djs-connection.bpmn-diff-changed .djs-visual > :nth-child(1) {
+  fill: none !important;
+}
+
+.bpmn-diff-changes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.bpmn-diff-changes ol {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.bpmn-diff-change {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 0.35rem 0.55rem;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--color-ink);
+  background: rgba(255, 255, 255, 0.02);
+  border-left: 2px solid transparent;
+  border-radius: 4px;
+}
+.bpmn-diff-change-added {
+  border-left-color: #22c55e;
+}
+.bpmn-diff-change-removed {
+  border-left-color: #ef4444;
+}
+.bpmn-diff-change-changed {
+  border-left-color: #f59e0b;
+}
+.bpmn-diff-change-layout {
+  border-left-color: #60a5fa;
+  opacity: 0.7;
+}
+
+.bpmn-diff-change-kind {
+  flex-shrink: 0;
+  width: 4.5rem;
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-faint);
+}
+.bpmn-diff-change-body {
+  min-width: 0;
+}
+.bpmn-diff-change-type {
+  color: var(--color-muted);
+}
+.bpmn-diff-change-body code {
+  color: var(--color-accent);
+}
+.bpmn-diff-change-body em {
+  font-style: normal;
+  color: var(--color-ink);
+}
+.bpmn-diff-change-attrs {
+  display: block;
+  color: var(--color-muted);
+}
+
+.bpmn-diff-more {
+  align-self: flex-start;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-faint);
+  cursor: pointer;
+}
+.bpmn-diff-more:hover {
+  color: var(--color-ink);
+}
+
+.bpmn-diff-note {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-faint);
+}
+
+.bpmn-diff-warning {
+  padding: 0.5rem 0.65rem;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: #fbbf24;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  border-radius: 6px;
+}
+
+.bpmn-diff .mermaid-error {
+  padding: 0.5rem 0.65rem;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  border-radius: 6px;
+}
+
+.bpmn-diff .bpmn-attribution {
+  position: absolute;
+  right: 0.75rem;
+  bottom: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-faint);
+  text-decoration: none;
+  opacity: 0.55;
+}
+.bpmn-diff .bpmn-attribution:hover {
+  opacity: 1;
+  color: var(--color-muted);
+}

@@ -162,8 +162,15 @@ export function registerVaultTools(server: McpServer, ctx: McpToolContext): void
         .string()
         .describe("Full markdown content, including optional --- frontmatter --- block."),
       brain: z.string().optional().describe("Brain name. Omit for default."),
+      message: z
+        .string()
+        .max(500)
+        .optional()
+        .describe(
+          "Why this document exists, in one line. Recorded on the version row and shown in history.",
+        ),
     },
-    async ({ path, content, brain }) => {
+    async ({ path, content, brain, message }) => {
       try {
         const organizationId = requireOrgId(ctx);
         const { tenant, createdId, brainId, brainName } = await withTenant(
@@ -216,6 +223,7 @@ export function registerVaultTools(server: McpServer, ctx: McpToolContext): void
                 mergeParentHash: null,
                 source: "mcp",
                 changedBy: ctx.identity,
+                message: message ?? null,
               },
             });
             await tx.vaultChangeLog.create({
@@ -280,8 +288,15 @@ export function registerVaultTools(server: McpServer, ctx: McpToolContext): void
         .describe(
           "Exact content you read. Required alongside baseHash for server-side three-way merge of concurrent edits.",
         ),
+      message: z
+        .string()
+        .max(500)
+        .optional()
+        .describe(
+          "Why this edit was made, in one line: the intent behind the change, not a restatement of it. Shown in version history and next to the visual diff. Always pass it when revising a ```bpmn diagram.",
+        ),
     },
-    async ({ path, content, brain, baseHash, baseContent }) => {
+    async ({ path, content, brain, baseHash, baseContent, message }) => {
       try {
         const organizationId = requireOrgId(ctx);
         const result = await withTenant(
@@ -374,6 +389,7 @@ export function registerVaultTools(server: McpServer, ctx: McpToolContext): void
                 mergeParentHash: merged ? (baseHash ?? null) : null,
                 source: "mcp",
                 changedBy: ctx.identity,
+                message: message ?? null,
               },
             });
             await tx.vaultChangeLog.create({

@@ -8,6 +8,7 @@ import { resolveBrain, isBrainError, canWrite } from "@/lib/vault";
 import { enforceDocumentsPerBrainLimit } from "@/lib/billing";
 import { authedTenantRoute } from "@/lib/route-helpers";
 import {
+  commitMessageSchema,
   documentContentSchema,
   validateBody,
   vaultPathSchema,
@@ -18,6 +19,8 @@ const createDocSchema = z.object({
   path: vaultPathSchema,
   content: documentContentSchema,
   source: vaultSourceSchema,
+  // Why this document exists. Recorded on the genesis version row.
+  message: commitMessageSchema.optional(),
 });
 
 /**
@@ -68,7 +71,7 @@ export const POST = authedTenantRoute(
 
     const validation = await validateBody(req, createDocSchema);
     if (!validation.ok) return validation.response;
-    const { path, content, source } = validation.value;
+    const { path, content, source, message } = validation.value;
 
     const existing = await tx.vaultDocument.findFirst({
       where: { brainId: brain.brainId, path },
@@ -126,6 +129,7 @@ export const POST = authedTenantRoute(
         mergeParentHash: null,
         source,
         changedBy: principal.identity,
+        message: message ?? null,
       },
     });
     await tx.vaultChangeLog.create({

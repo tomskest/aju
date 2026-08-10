@@ -90,6 +90,45 @@ Minimal working skeleton to copy:
 </bpmn:definitions>
 ```
 
+## Comparing two versions of a diagram
+
+A ` ```bpmn ` fence lives inside an ordinary document, so the document's
+version chain is also the diagram's version history. The web app uses
+that to render a visual diff: open a document, click **history**, select
+a version, and the **diff** tab appears whenever both sides carry a
+diagram.
+
+Nothing about the diff is stored. Both sides are whole, valid BPMN
+documents, and [bpmn-js-differ](https://github.com/bpmn-io/bpmn-js-differ)
+computes the difference at read time. A derived diff cannot drift from
+the versions it describes, and any two versions can be compared, not only
+adjacent ones. **Do not invent a diff encoding inside the XML** — write
+the next whole version instead.
+
+Selecting a past version compares it against the current head ("what has
+changed since"); selecting the head compares it against its predecessor
+("what this commit changed"). The older version renders on the left and
+the newer on the right, because removed elements exist only in the old
+document and added ones only in the new. Added is green, removed red,
+changed amber, and moved blue and collapsed by default.
+
+Two authoring rules keep a diff readable:
+
+1. **Element ids are immutable.** The diff is keyed on `id`. Renaming a
+   task means changing its `name` and keeping its id; changing the id
+   turns one rename into a delete plus an add. New elements get new,
+   previously unused ids.
+2. **Preserve DI verbatim.** Copy every untouched `dc:Bounds` and
+   `di:waypoint` exactly. Compute coordinates only for what you actually
+   touched. A wholesale re-layout marks every element as moved and buries
+   the real change.
+
+Pair each revision with `--message` on the write. The diff shows what
+changed; the version message is the only place why it changed survives.
+
+Elements missing DI parse but never draw, so the diff view lists them
+explicitly rather than showing a diagram with invisible parts.
+
 Layout conventions that read well: events are 36×36, gateways 50×50;
 flow left-to-right on a shared horizontal centerline; leave ~50px gaps
 between shapes. **Size each task to its name**: keep the label to two

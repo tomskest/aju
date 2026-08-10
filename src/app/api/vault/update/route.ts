@@ -7,6 +7,7 @@ import { updateDocumentEmbedding } from "@/lib/embeddings";
 import { resolveBrain, isBrainError, canWrite } from "@/lib/vault";
 import { authedTenantRoute } from "@/lib/route-helpers";
 import {
+  commitMessageSchema,
   documentContentSchema,
   validateBody,
   vaultPathSchema,
@@ -39,6 +40,9 @@ const updateDocSchema = z.object({
   // a mismatched baseHash, the server attempts a three-way merge instead
   // of bouncing the write straight to 409. Same size cap as `content`.
   baseContent: documentContentSchema.optional(),
+  // Why this edit was made. Stored on the version row, not the document,
+  // so history reads as a rationale trail rather than a list of hashes.
+  message: commitMessageSchema.optional(),
 });
 
 export const POST = authedTenantRoute(
@@ -55,7 +59,7 @@ export const POST = authedTenantRoute(
 
     const validation = await validateBody(req, updateDocSchema);
     if (!validation.ok) return validation.response;
-    const { path, content, source, baseHash, baseContent } = validation.value;
+    const { path, content, source, baseHash, baseContent, message } = validation.value;
 
     const existing = await tx.vaultDocument.findFirst({
       where: { brainId: brain.brainId, path },
@@ -221,6 +225,7 @@ export const POST = authedTenantRoute(
         mergeParentHash: merged ? baseHash ?? null : null,
         source,
         changedBy: principal.identity,
+        message: message ?? null,
       },
     });
     await tx.vaultChangeLog.create({

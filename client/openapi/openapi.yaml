@@ -746,6 +746,13 @@ components:
             On update only. Exact content the caller had at read time.
             Required alongside baseHash for server-side three-way merge of
             concurrent edits to non-overlapping regions.
+        message:
+          type: string
+          maxLength: 500
+          description: |
+            Why this write happened, in one line. Stored on the version
+            row (not the document) and surfaced in version history, which
+            is what turns a version chain into a rationale trail.
 
     DocumentUpdateConflict:
       type: object

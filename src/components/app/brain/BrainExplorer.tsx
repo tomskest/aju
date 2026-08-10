@@ -1,9 +1,11 @@
 "use client";
 
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import KbProse from "@/components/kb/KbProse";
+import { hasBpmnFence } from "@/lib/bpmn/diff";
 import DocToc from "@/components/kb/DocToc";
 import LocalDate from "@/components/kb/LocalDate";
 import ValidationPicker from "./ValidationPicker";
@@ -43,6 +45,21 @@ type VersionMeta = {
 };
 
 type VersionDetail = VersionMeta & { content: string };
+
+/** The two sides a BPMN diff is drawn from, oldest first. */
+type DiffPair = {
+  oldContent: string;
+  oldLabel: string;
+  newContent: string;
+  newLabel: string;
+};
+
+// bpmn-js and the differ are only worth loading once someone actually
+// opens a diff, so they stay out of the brain page's initial bundle.
+const BpmnDiff = dynamic(() => import("@/components/kb/BpmnDiff"), {
+  ssr: false,
+  loading: () => <p className="bpmn-diff-note">loading diff…</p>,
+});
 
 type Props = {
   brainName: string;
@@ -114,6 +131,10 @@ export default function BrainExplorer({
     null,
   );
   const [versionDetailLoading, setVersionDetailLoading] = useState(false);
+  // Both sides of a BPMN comparison for the selected version. Resolved
+  // alongside the version detail so the diff view has content to render
+  // without a second round of loading states.
+  const [diffPair, setDiffPair] = useState<DiffPair | null>(null);
 
   // Validation state. Server-rendered initial value comes through
   // currentDoc.validation; ValidationPicker calls onChanged after a
@@ -247,31 +268,67 @@ export default function BrainExplorer({
   const openHistory = () => {
     setHistoryOpen(true);
     setSelectedVersion(null);
+    setDiffPair(null);
     if (versions === null) void fetchVersions();
   };
 
   const closeHistory = () => {
     setHistoryOpen(false);
     setSelectedVersion(null);
+    setDiffPair(null);
+  };
+
+  const fetchVersionContent = async (n: number): Promise<VersionDetail | null> => {
+    if (!currentDoc) return null;
+    const params = new URLSearchParams({
+      brain: brainName,
+      path: currentDoc.path,
+      n: String(n),
+    });
+    const res = await fetch(`/api/vault/document/version?${params}`);
+    if (!res.ok) return null;
+    return (await res.json()) as VersionDetail;
   };
 
   const selectVersion = async (v: VersionMeta) => {
     if (!currentDoc) return;
     setVersionDetailLoading(true);
     setSelectedVersion(null);
+    setDiffPair(null);
     try {
-      const params = new URLSearchParams({
-        brain: brainName,
-        path: currentDoc.path,
-        n: String(v.versionN),
-      });
-      const res = await fetch(`/api/vault/document/version?${params}`);
-      if (!res.ok) {
+      const body = await fetchVersionContent(v.versionN);
+      if (!body) {
         setError("Failed to load version content");
         return;
       }
-      const body = (await res.json()) as VersionDetail;
       setSelectedVersion(body);
+
+      // Pick what this version is most usefully compared against: for a
+      // past version, the current head ("what has changed since"); for
+      // the head itself, its predecessor ("what this commit changed").
+      if (body.contentHash !== currentDoc.contentHash) {
+        setDiffPair({
+          oldContent: body.content,
+          oldLabel: `v${body.versionN}`,
+          newContent: currentDoc.content,
+          newLabel: "head",
+        });
+        return;
+      }
+      const previousN = (versions ?? [])
+        .map((x) => x.versionN)
+        .filter((n) => n < v.versionN)
+        .sort((a, b) => b - a)[0];
+      if (previousN === undefined) return;
+      const previous = await fetchVersionContent(previousN);
+      if (previous) {
+        setDiffPair({
+          oldContent: previous.content,
+          oldLabel: `v${previous.versionN}`,
+          newContent: body.content,
+          newLabel: `v${body.versionN} · head`,
+        });
+      }
     } finally {
       setVersionDetailLoading(false);
     }
@@ -556,7 +613,11 @@ export default function BrainExplorer({
                 version={selectedVersion}
                 isHead={selectedVersion.contentHash === currentDoc.contentHash}
                 canRestore={canWrite}
-                onClose={() => setSelectedVersion(null)}
+                diffPair={diffPair}
+                onClose={() => {
+                  setSelectedVersion(null);
+                  setDiffPair(null);
+                }}
                 onRestore={() => restoreVersion(selectedVersion)}
               />
             ) : (
@@ -977,6 +1038,11 @@ function HistoryPanel({
                       </span>
                     )}
                   </div>
+                  {v.message && (
+                    <p className="font-mono text-[10px] leading-snug text-[var(--color-ink)]">
+                      {v.message}
+                    </p>
+                  )}
                   <p className="font-mono text-[10px] text-[var(--color-faint)]">
                     {v.contentHash.slice(0, 10)}…
                   </p>
@@ -1002,15 +1068,28 @@ function VersionPreview({
   version,
   isHead,
   canRestore,
+  diffPair,
   onClose,
   onRestore,
 }: {
   version: VersionDetail;
   isHead: boolean;
   canRestore: boolean;
+  diffPair: DiffPair | null;
   onClose: () => void;
   onRestore: () => void;
 }) {
+  // A BPMN diff is only meaningful when both sides carry a diagram, and
+  // it is the more useful default view when they do.
+  const canDiff =
+    diffPair !== null &&
+    (hasBpmnFence(diffPair.oldContent) || hasBpmnFence(diffPair.newContent));
+  const [mode, setMode] = useState<"source" | "diff">(canDiff ? "diff" : "source");
+
+  useEffect(() => {
+    setMode(canDiff ? "diff" : "source");
+  }, [canDiff, version.contentHash]);
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between rounded-md border border-white/10 bg-[var(--color-panel)] px-3 py-2">
@@ -1029,8 +1108,31 @@ function VersionPreview({
             {version.source}
             {version.changedBy ? ` · ${version.changedBy}` : ""}
           </p>
+          {version.message && (
+            <p className="font-mono text-[11px] text-[var(--color-muted)]">
+              {version.message}
+            </p>
+          )}
         </div>
         <div className="flex gap-2">
+          {canDiff && (
+            <div className="flex overflow-hidden rounded-md border border-white/10">
+              {(["diff", "source"] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setMode(m)}
+                  className={`px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.18em] transition ${
+                    mode === m
+                      ? "bg-white/10 text-[var(--color-ink)]"
+                      : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+                  }`}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+          )}
           {canRestore && !isHead && (
             <button
               type="button"
@@ -1049,9 +1151,18 @@ function VersionPreview({
           </button>
         </div>
       </div>
-      <pre className="overflow-x-auto rounded-md border border-white/10 bg-[var(--color-panel)] p-4 font-mono text-[12px] leading-relaxed text-[var(--color-ink)] whitespace-pre-wrap">
-        {version.content}
-      </pre>
+      {mode === "diff" && diffPair ? (
+        <BpmnDiff
+          oldContent={diffPair.oldContent}
+          newContent={diffPair.newContent}
+          oldLabel={diffPair.oldLabel}
+          newLabel={diffPair.newLabel}
+        />
+      ) : (
+        <pre className="overflow-x-auto rounded-md border border-white/10 bg-[var(--color-panel)] p-4 font-mono text-[12px] leading-relaxed text-[var(--color-ink)] whitespace-pre-wrap">
+          {version.content}
+        </pre>
+      )}
     </div>
   );
 }

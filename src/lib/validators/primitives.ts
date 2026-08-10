@@ -48,6 +48,11 @@ export const nameSchema = z.string().trim().min(1).max(120);
 // agent descriptions. Bounded to keep DB rows reasonable.
 export const messageSchema = z.string().trim().max(2000);
 
+// Why a document version was written. Short by design: it shows up
+// inline in version history, so it should read like a commit subject
+// rather than a changelog entry.
+export const commitMessageSchema = z.string().trim().min(1).max(500);
+
 // Document path inside a vault — relative, no traversal. Mirrors the
 // vault_documents.path constraint.
 export const vaultPathSchema = z
