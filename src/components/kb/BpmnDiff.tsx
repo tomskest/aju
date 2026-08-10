@@ -34,6 +34,12 @@ type Props = {
   newContent: string;
   oldLabel: string;
   newLabel: string;
+  /**
+   * Restrict to a single diagram by its position in the document. Used
+   * when the diff is opened from one figure in the document body, where
+   * comparing every diagram in the file would be noise.
+   */
+  only?: number;
 };
 
 type Layout = "stacked" | "columns";
@@ -54,6 +60,7 @@ const KIND_LABEL: Record<ChangeKind, string> = {
 type Canvas = {
   addMarker: (id: string, cls: string) => void;
   zoom: ((level?: number | string, center?: string | null) => number) | (() => number);
+  resized: () => void;
 };
 
 type ElementRegistry = {
@@ -85,11 +92,13 @@ async function loadDiffer() {
   return differPromise;
 }
 
-export default function BpmnDiff({ oldContent, newContent, oldLabel, newLabel }: Props) {
+export default function BpmnDiff({ oldContent, newContent, oldLabel, newLabel, only }: Props) {
   const oldFences = useMemo(() => extractBpmnFences(oldContent), [oldContent]);
   const newFences = useMemo(() => extractBpmnFences(newContent), [newContent]);
 
   const pairCount = Math.max(oldFences.length, newFences.length);
+  const indexes =
+    only === undefined ? Array.from({ length: pairCount }, (_, i) => i) : [only];
 
   if (pairCount === 0) {
     return (
@@ -99,15 +108,19 @@ export default function BpmnDiff({ oldContent, newContent, oldLabel, newLabel }:
     );
   }
 
+  if (only !== undefined && only >= pairCount) {
+    return <p className="bpmn-diff-note">That diagram does not exist in either version.</p>;
+  }
+
   return (
     <div className="flex flex-col gap-6">
-      {oldFences.length !== newFences.length && (
+      {only === undefined && oldFences.length !== newFences.length && (
         <p className="bpmn-diff-note">
           Diagram count changed: {oldFences.length} in {oldLabel}, {newFences.length} in{" "}
           {newLabel}. Diagrams are paired in document order.
         </p>
       )}
-      {Array.from({ length: pairCount }, (_, i) => (
+      {indexes.map((i) => (
         <BpmnDiffPair
           key={i}
           index={i}
@@ -146,6 +159,7 @@ function BpmnDiffPair({
   const [entries, setEntries] = useState<ChangeEntry[]>([]);
   const [undrawn, setUndrawn] = useState<string[]>([]);
   const [layout, setLayout] = useState<Layout>("stacked");
+  const [fullscreen, setFullscreen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -250,10 +264,42 @@ function BpmnDiffPair({
 
   const fitBoth = useCallback(() => fitAll(viewersRef.current), []);
 
+  // Fullscreen changes the canvas boxes, and bpmn-js caches viewport size,
+  // so both viewers need telling before a re-fit lands correctly.
+  useEffect(() => {
+    if (!fullscreen) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setFullscreen(false);
+    };
+    document.addEventListener("keydown", onKey);
+
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [fullscreen]);
+
+  useEffect(() => {
+    const id = requestAnimationFrame(() => {
+      for (const v of viewersRef.current) {
+        try {
+          v.get<Canvas>("canvas").resized();
+        } catch {
+          /* canvas not ready */
+        }
+      }
+      fitAll(viewersRef.current);
+    });
+    return () => cancelAnimationFrame(id);
+  }, [fullscreen, layout, status]);
+
   const counts = countByKind(entries);
 
   return (
-    <section className="bpmn-diff">
+    <section className={`bpmn-diff${fullscreen ? " is-fullscreen" : ""}`}>
       <header className="bpmn-diff-toolbar">
         <div className="bpmn-diff-legend">
           {total > 1 && (
@@ -275,6 +321,14 @@ function BpmnDiffPair({
           </button>
           <button type="button" onClick={fitBoth} title="Fit both diagrams">
             fit
+          </button>
+          <button
+            type="button"
+            className="bpmn-diff-expand"
+            onClick={() => setFullscreen((v) => !v)}
+            title={fullscreen ? "Leave fullscreen (Esc)" : "Fullscreen"}
+          >
+            {fullscreen ? "close" : "expand"}
           </button>
           <button
             type="button"

@@ -129,6 +129,13 @@ changed; the version message is the only place why it changed survives.
 Elements missing DI parse but never draw, so the diff view lists them
 explicitly rather than showing a diagram with invisible parts.
 
+A related trap, since it registers as a layout change rather than an
+error: an edge's final waypoint must sit on the border it approaches
+from. For a target at `y` with height `h`, a leg coming up from below
+ends at `y + h`, not at `y`. Ending an upward leg at `y` parses fine and
+then draws the line straight through the shape with the arrowhead
+floating above it.
+
 Layout conventions that read well: events are 36×36, gateways 50×50;
 flow left-to-right on a shared horizontal centerline; leave ~50px gaps
 between shapes. **Size each task to its name**: keep the label to two

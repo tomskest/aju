@@ -260,6 +260,7 @@ Emit the full document with the fence replaced. Two rules decide whether the res
 Then the rules that keep it renderable at all:
 
 - Every new flow node needs a `BPMNShape` and every new sequence flow a `BPMNEdge`. Missing DI parses fine and then silently fails to draw. The diff view flags this, but catch it yourself.
+- **An edge's final waypoint sits on the border it approaches from, never the opposite one.** For a target at `y`, height `h`: a leg coming up from below ends at `y + h` (the bottom border), a leg coming down from above ends at `y`, a leg coming from the left ends at `x`. Ending an upward leg at `y` is the common slip: it parses, and bpmn-js then draws the line straight through the shape with the arrowhead floating above it. This is invisible in the XML and obvious in the render, so check every edge whose last leg is vertical.
 - Events 36×36, gateways 50×50, tasks sized to their label: roughly 6px per character per line plus 20px padding, two lines maximum.
 - Inserting between two elements: shift the downstream shapes right by the new width plus the gap, and re-route only the edges touching the insert. Those shifts show up as "moved" in the diff and are de-emphasised there, which is expected rather than a mistake.
 - Keep one `bpmn:definitions` root containing both the process and the `bpmndi:BPMNDiagram` section.

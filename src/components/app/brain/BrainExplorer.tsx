@@ -136,6 +136,17 @@ export default function BrainExplorer({
   // without a second round of loading states.
   const [diffPair, setDiffPair] = useState<DiffPair | null>(null);
 
+  // Diagram-level diff opened from the document body, so comparing a
+  // process against an earlier version does not mean entering history
+  // mode and losing the document you were reading.
+  const [diagramDiff, setDiagramDiff] = useState<{
+    index: number;
+    pair: DiffPair;
+    choices: VersionMeta[];
+  } | null>(null);
+  const [diagramDiffLoading, setDiagramDiffLoading] = useState(false);
+  const [diagramDiffNote, setDiagramDiffNote] = useState<string | null>(null);
+
   // Validation state. Server-rendered initial value comes through
   // currentDoc.validation; ValidationPicker calls onChanged after a
   // successful POST so the badge updates without a full router.refresh().
@@ -333,6 +344,94 @@ export default function BrainExplorer({
       setVersionDetailLoading(false);
     }
   };
+
+  // ── Diagram diff from the document body ─────────────────────
+  // Deliberately self-contained: it re-fetches the version list rather
+  // than reading `versions` state, because KbProse wires its buttons
+  // once per rendered document and would otherwise hold a closure from
+  // before history was ever opened.
+  const openDiagramDiff = async (index: number) => {
+    if (!currentDoc) return;
+    setDiagramDiffNote(null);
+    setDiagramDiffLoading(true);
+    try {
+      const params = new URLSearchParams({
+        brain: brainName,
+        path: currentDoc.path,
+        limit: "100",
+      });
+      const res = await fetch(`/api/vault/document/versions?${params}`);
+      if (!res.ok) {
+        setDiagramDiffNote("Could not load version history for this document.");
+        return;
+      }
+      const { versions: all } = (await res.json()) as { versions: VersionMeta[] };
+      setVersions(all);
+
+      const head = all.find((v) => v.contentHash === currentDoc.contentHash);
+      const older = all
+        .filter((v) => v.contentHash !== currentDoc.contentHash)
+        .filter((v) => (head ? v.versionN < head.versionN : true))
+        .sort((a, b) => b.versionN - a.versionN);
+
+      if (older.length === 0) {
+        setDiagramDiffNote("This document has only one version, so there is nothing to compare.");
+        return;
+      }
+
+      const previous = await fetchVersionContent(older[0].versionN);
+      if (!previous) {
+        setDiagramDiffNote("Could not load the previous version.");
+        return;
+      }
+
+      setDiagramDiff({
+        index,
+        choices: older,
+        pair: {
+          oldContent: previous.content,
+          oldLabel: `v${previous.versionN}`,
+          newContent: currentDoc.content,
+          newLabel: head ? `v${head.versionN} · head` : "head",
+        },
+      });
+    } finally {
+      setDiagramDiffLoading(false);
+    }
+  };
+
+  const changeDiagramDiffBase = async (versionN: number) => {
+    if (!diagramDiff) return;
+    setDiagramDiffLoading(true);
+    try {
+      const older = await fetchVersionContent(versionN);
+      if (!older) return;
+      setDiagramDiff({
+        ...diagramDiff,
+        pair: {
+          ...diagramDiff.pair,
+          oldContent: older.content,
+          oldLabel: `v${older.versionN}`,
+        },
+      });
+    } finally {
+      setDiagramDiffLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!diagramDiff) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setDiagramDiff(null);
+    };
+    document.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [diagramDiff]);
 
   const restoreVersion = async (v: VersionDetail) => {
     if (!currentDoc) return;
@@ -621,7 +720,17 @@ export default function BrainExplorer({
                 onRestore={() => restoreVersion(selectedVersion)}
               />
             ) : (
-              <KbProse html={currentDoc.rendered} />
+              <>
+                {diagramDiffNote && (
+                  <div className="mb-4 rounded-md border border-white/10 bg-[var(--color-panel)] px-3 py-2 font-mono text-[11px] text-[var(--color-muted)]">
+                    {diagramDiffNote}
+                  </div>
+                )}
+                <KbProse
+                  html={currentDoc.rendered}
+                  onDiagramDiff={(index) => void openDiagramDiff(index)}
+                />
+              </>
             )}
           </article>
             {!editing && (
@@ -759,6 +868,61 @@ export default function BrainExplorer({
                 create
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {diagramDiff && currentDoc && (
+        <div
+          className="bpmn-diff-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Diagram version comparison"
+        >
+          <header className="bpmn-diff-overlay-bar">
+            <div className="flex min-w-0 flex-col gap-0.5">
+              <p className="truncate font-mono text-[11px] text-[var(--color-ink)]">
+                {currentDoc.path}
+              </p>
+              <p className="font-mono text-[10px] text-[var(--color-faint)]">
+                diagram {diagramDiff.index + 1} · comparing {diagramDiff.pair.oldLabel} against{" "}
+                {diagramDiff.pair.newLabel}
+                {diagramDiffLoading ? " · loading…" : ""}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--color-faint)]">
+                compare with
+              </label>
+              <select
+                value={diagramDiff.pair.oldLabel.replace(/^v/, "")}
+                onChange={(e) => void changeDiagramDiffBase(Number(e.target.value))}
+                className="rounded-md border border-white/10 bg-[var(--color-panel)] px-2 py-1.5 font-mono text-[10px] text-[var(--color-ink)]"
+              >
+                {diagramDiff.choices.map((v) => (
+                  <option key={v.id} value={v.versionN}>
+                    v{v.versionN}
+                    {v.message ? ` · ${v.message.slice(0, 40)}` : ""}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => setDiagramDiff(null)}
+                className="rounded-md border border-white/10 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--color-muted)] transition hover:border-white/20 hover:text-[var(--color-ink)]"
+              >
+                close
+              </button>
+            </div>
+          </header>
+          <div className="bpmn-diff-overlay-body">
+            <BpmnDiff
+              oldContent={diagramDiff.pair.oldContent}
+              newContent={diagramDiff.pair.newContent}
+              oldLabel={diagramDiff.pair.oldLabel}
+              newLabel={diagramDiff.pair.newLabel}
+              only={diagramDiff.index}
+            />
           </div>
         </div>
       )}

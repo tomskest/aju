@@ -17,6 +17,13 @@ import { memo, useEffect, useRef } from "react";
 type Props = {
   html: string;
   className?: string;
+  /**
+   * When supplied, every rendered ```bpmn figure gets a "diff" button
+   * that calls this with the diagram's position in the document. Left
+   * out on the public KB, which has no version history to compare
+   * against.
+   */
+  onDiagramDiff?: (bpmnIndex: number) => void;
 };
 
 let mermaidLoadPromise: Promise<typeof import("mermaid").default> | null = null;
@@ -403,8 +410,14 @@ function openMermaidFullscreen(sourceSvg: SVGElement) {
   requestAnimationFrame(fit);
 }
 
-function KbProseInner({ html, className }: Props) {
+function KbProseInner({ html, className, onDiagramDiff }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // The enhancement effect runs on `html` alone (re-running it would
+  // detach figures mid-render), so buttons read the callback through a
+  // ref rather than closing over the value at wiring time.
+  const onDiagramDiffRef = useRef(onDiagramDiff);
+  onDiagramDiffRef.current = onDiagramDiff;
 
   useEffect(() => {
     const root = containerRef.current;
@@ -561,6 +574,20 @@ function KbProseInner({ html, className }: Props) {
         expandBtn.textContent = "expand";
         expandBtn.title = "Open fullscreen (drag to pan, scroll to zoom)";
         figure.appendChild(expandBtn);
+
+        if (onDiagramDiffRef.current) {
+          const diffIndex = i;
+          const diffBtn = document.createElement("button");
+          diffBtn.type = "button";
+          diffBtn.className = "mermaid-diff";
+          diffBtn.textContent = "diff";
+          diffBtn.title = "Compare this diagram against an earlier version";
+          diffBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            onDiagramDiffRef.current?.(diffIndex);
+          });
+          figure.appendChild(diffBtn);
+        }
 
         const svgWrap = document.createElement("div");
         svgWrap.className = "mermaid-svg";
