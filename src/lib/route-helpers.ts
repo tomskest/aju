@@ -244,6 +244,14 @@ export type UserHandlerCtx<TParams = Record<string, never>> = {
 export type UserHandlerOpts = {
   /** Credential capability required (default "read"). */
   requiresScope?: ApiKeyScope;
+  /**
+   * Reject agent-key principals outright (default false). Mirrors the
+   * unconditional agent check in `authedOrgRoute`: some self-service routes
+   * are control-plane actions a delegated agent must never take on the
+   * minting human's behalf regardless of the scopes its key carries, e.g.
+   * billing checkout and portal, which reach the human's card.
+   */
+  humanOnly?: boolean;
 };
 
 /**
@@ -263,6 +271,14 @@ export function authedUserRoute<TParams = Record<string, never>>(
   return async (req, routeCtx) => {
     const auth = await currentAuth(req);
     if (!auth) return unauthorized();
+
+    if (opts.humanOnly && auth.agentId) {
+      return NextResponse.json(
+        { error: "agent_principals_not_allowed" },
+        { status: 403 },
+      );
+    }
+
     if (!auth.scopes.includes(requiresScope)) {
       return insufficientScope(requiresScope);
     }

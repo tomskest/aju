@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { currentAuth } from "@/lib/auth";
+import { syncSeatsToStripe } from "@/lib/billing";
 import { canManageMembers, type OrgRole } from "@/lib/tenant";
 import {
   sendEmail,
@@ -106,6 +107,10 @@ export async function PATCH(req: NextRequest, { params }: Params) {
         },
       });
     });
+
+    // Approving a request seats a new member. Sync after commit; no-ops
+    // unless the org holds a Team subscription.
+    await syncSeatsToStripe(request.organizationId);
 
     if (request.organization) {
       const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "https://aju.sh";

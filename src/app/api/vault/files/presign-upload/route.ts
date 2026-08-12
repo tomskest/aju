@@ -7,7 +7,7 @@ import { validateS3PathSegment } from "@/lib/storage";
 import { authedTenantRoute } from "@/lib/route-helpers";
 
 export const POST = authedTenantRoute(
-  async ({ req, tx, organizationId, user, principal }) => {
+  async ({ req, tx, organizationId, principal }) => {
     const brain = await resolveBrain(tx, req, principal);
     if (isBrainError(brain)) return brain;
     if (!canWrite(brain)) {
@@ -80,10 +80,7 @@ export const POST = authedTenantRoute(
       Number.isFinite(sizeBytes) &&
       principal.userId
     ) {
-      const limitErr = await enforceStorageLimit(user.id, sizeBytes, {
-        organizationId,
-        tx,
-      });
+      const limitErr = await enforceStorageLimit(organizationId, sizeBytes, tx);
       if (limitErr) return limitErr;
     }
 

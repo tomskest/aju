@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "crypto";
 import { prisma } from "@/lib/db";
 import { currentAuth, setActiveOrganizationId } from "@/lib/auth";
+import { syncSeatsToStripe } from "@/lib/billing";
 import { normalizeEmail } from "@/lib/validators";
 
 function hashInviteToken(token: string): string {
@@ -98,6 +99,12 @@ export async function POST(
       data: { acceptedAt: now },
     });
   });
+
+  // Seat count changed. Sync AFTER the transaction commits so Stripe is never
+  // told about a seat that a later rollback would have removed. No-ops unless
+  // the org actually holds a Team subscription, and never throws — a billing
+  // hiccup must not fail an invitation the user already accepted.
+  await syncSeatsToStripe(organizationId);
 
   await setActiveOrganizationId(organizationId);
 

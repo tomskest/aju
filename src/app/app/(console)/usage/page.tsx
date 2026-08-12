@@ -2,7 +2,14 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { prisma, tenantDbFor } from "@/lib/db";
 import { currentUser, getActiveOrganizationId } from "@/lib/auth";
-import { limitsFor } from "@/lib/billing";
+import {
+  bestTierForUser,
+  effectiveTierForOrg,
+  isUnlimited,
+  limitsFor,
+  PLAN_LIMITS,
+} from "@/lib/billing";
+import ManageBillingButton from "@/components/app/ManageBillingButton";
 
 export const dynamic = "force-dynamic";
 
@@ -59,10 +66,20 @@ type TileProps = {
 };
 
 function UsageTile({ label, current, limit, format, hint }: TileProps) {
+  // An uncapped tier has no meaningful ratio: a progress bar pinned near zero
+  // against a sentinel ceiling reads as "you have barely any headroom left"
+  // when the truth is the opposite.
+  const unlimited = isUnlimited(limit);
   const safeLimit = limit > 0 ? limit : 1;
-  const ratio = Math.min(1, current / safeLimit);
+  const ratio = unlimited ? 0 : Math.min(1, current / safeLimit);
   const pct = Math.max(0, Math.min(100, ratio * 100));
-  const threshold = thresholdFor(ratio);
+  const threshold = unlimited
+    ? {
+        bar: "bg-[var(--color-accent)]",
+        valueClass: "text-[var(--color-ink)]",
+        label: "unlimited",
+      }
+    : thresholdFor(ratio);
 
   return (
     <div className="flex flex-col gap-4 rounded-xl border border-white/10 bg-[var(--color-panel)]/85 p-5">
@@ -82,7 +99,7 @@ function UsageTile({ label, current, limit, format, hint }: TileProps) {
           {format(current)}
         </span>
         <span className="font-mono text-[12px] text-[var(--color-faint)]">
-          / {format(limit)}
+          {unlimited ? "/ ∞" : `/ ${format(limit)}`}
         </span>
       </div>
 
@@ -110,13 +127,20 @@ function PlanBadge({
   grandfathered: boolean;
 }) {
   const isBetaLegacy = planTier === "beta_legacy";
-  const label = isBetaLegacy
-    ? "Beta Legacy"
-    : planTier === "free"
-      ? "Free"
-      : planTier;
+  const LABELS: Record<string, string> = {
+    beta_legacy: "Beta Legacy",
+    beta_founder: "Founder",
+    free: "Free",
+    pro: "Pro",
+    team: "Team",
+  };
+  const label = LABELS[planTier] ?? planTier;
 
-  const tone = isBetaLegacy
+  // Paid and grandfathered tiers both get the accent treatment: one is earned,
+  // the other is bought, and neither should read as the default state.
+  const highlighted =
+    isBetaLegacy || planTier === "pro" || planTier === "team";
+  const tone = highlighted
     ? "border-[var(--color-accent)]/40 bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
     : "border-white/10 bg-white/[0.04] text-[var(--color-muted)]";
 
@@ -135,11 +159,22 @@ export default async function UsagePage() {
   if (!user) redirect("/");
 
   const userId = user.id;
-  const planTier = user.planTier ?? "free";
   const grandfathered = user.grandfatheredAt !== null;
-  const limits = limitsFor(planTier);
 
   const organizationId = await getActiveOrganizationId();
+
+  // Caps on stored things are resolved against the ACTIVE ORG, matching what
+  // enforcement actually does. Showing the user's personal tier here instead
+  // would misreport the ceiling for anyone working inside a Team org.
+  const orgTier = organizationId
+    ? await effectiveTierForOrg(organizationId)
+    : null;
+  const planTier = orgTier ?? (user.planTier ?? "free");
+  const limits = orgTier ? PLAN_LIMITS[orgTier] : limitsFor(user.planTier);
+
+  // API keys are the one user-global cap, so they get their own tier.
+  const keyTier = await bestTierForUser(userId);
+  const apiKeysLimit = PLAN_LIMITS[keyTier].apiKeysMax;
 
   // Control-plane queries don't depend on a tenant client.
   const [apiKeysActive, placement] = await Promise.all([
@@ -153,9 +188,9 @@ export default async function UsagePage() {
       : Promise.resolve<number | null>(null),
   ]);
 
-  // Tenant-plane counters — scoped to the active org's DB, limited to brains
-  // the caller has access to. A user with no active org shows zero for
-  // tenant-backed tiles (plan limits still render).
+  // Tenant-plane counters — the whole org's DB, not just the brains this user
+  // can see. The cap is on what the paying entity stores, so a teammate's
+  // brain consumes the same allowance and has to be visible in the tally.
   let documents = 0;
   let files = 0;
   let storageBytes = 0;
@@ -163,23 +198,20 @@ export default async function UsagePage() {
   if (organizationId) {
     const tenant = await tenantDbFor(organizationId);
     const [d, f, fAgg, b] = await Promise.all([
-      tenant.vaultDocument.count({
-        where: { brain: { access: { some: { userId } } } },
-      }),
-      tenant.vaultFile.count({
-        where: { brain: { access: { some: { userId } } } },
-      }),
-      tenant.vaultFile.aggregate({
-        where: { brain: { access: { some: { userId } } } },
-        _sum: { sizeBytes: true },
-      }),
-      tenant.brainAccess.count({ where: { userId } }),
+      tenant.vaultDocument.count(),
+      tenant.vaultFile.count(),
+      tenant.vaultFile.aggregate({ _sum: { sizeBytes: true } }),
+      tenant.brain.count(),
     ]);
     documents = d;
     files = f;
     storageBytes = fAgg._sum.sizeBytes ?? 0;
     brainCount = b;
   }
+
+  // What can this user actually buy from here?
+  const canBuyPro = user.planTier !== "pro" && !grandfathered;
+  const showManage = user.planTier === "pro";
 
   // Documents limit is per-brain × brain count (or a floor of 1 brain to
   // avoid showing "0 / 0" when a user has no brains yet).
@@ -198,11 +230,29 @@ export default async function UsagePage() {
           <PlanBadge planTier={planTier} grandfathered={grandfathered} />
         </div>
         <p className="max-w-[560px] text-[13px] leading-6 text-[var(--color-muted)]">
-          Point-in-time snapshot of what you&rsquo;re storing across every
-          brain you can access in your active organization. Rate-limited
-          counters (searches, embedding tokens) aren&rsquo;t plotted here yet —
-          they ship with the usage event pipeline.
+          Point-in-time snapshot of everything stored in your active
+          organization. Caps are set by whoever pays for that org, so a shared
+          brain a teammate created counts against the same allowance.
+          Rate-limited counters (searches, embedding tokens) aren&rsquo;t
+          plotted here yet — they ship with the usage event pipeline.
         </p>
+        <div className="flex flex-wrap items-center gap-3">
+          {canBuyPro && (
+            <Link
+              href="/pricing"
+              className="inline-flex items-center justify-center rounded-lg bg-[var(--color-accent)] px-4 py-2 font-mono text-[11px] uppercase tracking-[0.2em] text-black transition-colors hover:bg-[var(--color-accent)]/85"
+            >
+              upgrade to pro
+            </Link>
+          )}
+          {showManage && <ManageBillingButton />}
+          <Link
+            href="/pricing"
+            className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--color-muted)] underline-offset-4 hover:text-[var(--color-ink)] hover:underline"
+          >
+            compare plans
+          </Link>
+        </div>
       </section>
 
       {grandfathered && placement !== null && placement !== undefined && (
@@ -212,11 +262,13 @@ export default async function UsagePage() {
               ✓ beta cohort
             </p>
             <p className="font-mono text-[13px] text-[var(--color-ink)]">
-              aju #{placement} of 100 · beta runs through 30 June 2026
+              aju #{placement} of 100 · free, permanently
             </p>
             <p className="text-[12px] leading-6 text-[var(--color-muted)]">
-              Transition plan will be finalised before the beta closes. No
-              matter how it shakes out, your data stays portable — run{" "}
+              You were here before there was a price, so these caps stay yours
+              at no cost for as long as the account exists. Pro is there if you
+              outgrow them, never because we withdrew this. Your data stays
+              portable either way — run{" "}
               <span className="font-mono text-[var(--color-ink)]">
                 aju export
               </span>{" "}
@@ -240,7 +292,7 @@ export default async function UsagePage() {
             current={brainCount}
             limit={limits.brains}
             format={formatNumber}
-            hint="Vaults you own or have been granted access to."
+            hint="Every brain in this organization, not only the ones you can open."
           />
           <UsageTile
             label="documents"
@@ -261,14 +313,14 @@ export default async function UsagePage() {
             current={storageBytes}
             limit={limits.storageBytesMax}
             format={formatBytes}
-            hint="Sum of all file bytes across your brains."
+            hint="Sum of all file bytes in this organization, pooled."
           />
           <UsageTile
             label="api keys · active"
             current={apiKeysActive}
-            limit={limits.apiKeysMax}
+            limit={apiKeysLimit}
             format={formatNumber}
-            hint="Non-revoked keys. Rotate anything you suspect is leaked."
+            hint="Non-revoked keys across every org. Rotate anything you suspect is leaked."
           />
           <div className="flex flex-col gap-4 rounded-xl border border-dashed border-white/10 bg-[var(--color-panel)]/50 p-5">
             <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--color-muted)]">
@@ -301,16 +353,18 @@ export default async function UsagePage() {
           about these limits
         </p>
         <p className="mt-3 text-[13px] leading-6 text-[var(--color-muted)]">
-          The beta legacy plan locks in a generous set of caps for the first
-          100 verified signups. Read the{" "}
+          Storage, brains, and documents are capped by whoever pays for this
+          organization: its Team subscription if it has one, otherwise the
+          owner&rsquo;s personal plan. API keys are the exception — they belong
+          to you rather than to any one org, so they use the best plan
+          you&rsquo;re covered by anywhere. See{" "}
           <Link
-            href="/doc/beta-plan"
+            href="/pricing"
             className="font-mono text-[var(--color-accent)] underline-offset-4 hover:underline"
           >
-            beta plan details
+            pricing
           </Link>{" "}
-          for what&rsquo;s included, what stays free, and how the cohort
-          counter works.
+          for what each plan includes.
         </p>
       </section>
     </div>

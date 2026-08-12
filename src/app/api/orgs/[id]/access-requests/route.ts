@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { currentAuth } from "@/lib/auth";
-import { getEmailDomain } from "@/lib/billing";
+import { getEmailDomain, syncSeatsToStripe } from "@/lib/billing";
 import { sendEmail, accessRequestReviewEmail } from "@/lib/email";
 import { authedOrgRoute } from "@/lib/route-helpers";
 import { messageSchema, validateBody } from "@/lib/validators";
@@ -177,6 +177,12 @@ export async function POST(
     });
     return { row, autoAccepted: false as const };
   });
+
+  // A domain auto-accept seats the requester immediately; a pending request
+  // does not, so only the auto-accepted branch changes what we bill.
+  if (result.autoAccepted) {
+    await syncSeatsToStripe(organizationId);
+  }
 
   // Notify org admins when the request is not auto-approved.
   if (!result.autoAccepted) {

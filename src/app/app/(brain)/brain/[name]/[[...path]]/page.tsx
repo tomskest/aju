@@ -169,6 +169,7 @@ export default async function BrainPage(props: PageProps) {
       brainType={brain.type}
       canWrite={canWrite}
       canValidate={canValidate}
+      viewerIdentity={user.email}
       docs={docs}
       currentDoc={currentDoc}
       currentPath={docPath}

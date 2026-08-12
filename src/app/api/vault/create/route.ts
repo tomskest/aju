@@ -46,7 +46,7 @@ function deriveProvenance(opts: {
 }
 
 export const POST = authedTenantRoute(
-  async ({ req, tenant, tx, user, principal }) => {
+  async ({ req, tenant, tx, principal, organizationId }) => {
     const brain = await resolveBrain(tx, req, principal);
     if (isBrainError(brain)) return brain;
 
@@ -57,15 +57,17 @@ export const POST = authedTenantRoute(
       );
     }
 
-    // Plan-limit gate: documentsPerBrain. Agent principals inherit the user
-    // slot's tier (the user is the human who minted the agent key).
+    // Plan-limit gate: documentsPerBrain, resolved against the org that owns
+    // the brain rather than the caller. Agent principals therefore inherit
+    // the org's tier automatically, and a Team member writing into the team's
+    // brain gets the team's cap rather than their personal one.
     //
     // Uses `tx` so the count shares the open interactive transaction instead
     // of racing it on a separate pgbouncer connection.
     const limitErr = await enforceDocumentsPerBrainLimit(
       tx,
       brain.brainId,
-      user.id,
+      organizationId,
     );
     if (limitErr) return limitErr;
 

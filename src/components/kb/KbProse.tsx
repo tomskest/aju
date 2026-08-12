@@ -19,11 +19,13 @@ type Props = {
   className?: string;
   /**
    * When supplied, every rendered ```bpmn figure gets a "diff" button
-   * that calls this with the diagram's position in the document. Left
-   * out on the public KB, which has no version history to compare
-   * against.
+   * that calls this with the diagram's position in the document and the
+   * fence's source text, so the diff can find the same diagram by
+   * content where the raw-markdown fence scanner counts blocks
+   * differently from the DOM. Left out on the public KB, which has no
+   * version history to compare against.
    */
-  onDiagramDiff?: (bpmnIndex: number) => void;
+  onDiagramDiff?: (bpmnIndex: number, source: string) => void;
 };
 
 let mermaidLoadPromise: Promise<typeof import("mermaid").default> | null = null;
@@ -584,7 +586,7 @@ function KbProseInner({ html, className, onDiagramDiff }: Props) {
           diffBtn.title = "Compare this diagram against an earlier version";
           diffBtn.addEventListener("click", (e) => {
             e.stopPropagation();
-            onDiagramDiffRef.current?.(diffIndex);
+            onDiagramDiffRef.current?.(diffIndex, source);
           });
           figure.appendChild(diffBtn);
         }

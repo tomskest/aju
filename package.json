@@ -26,7 +26,8 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "stripe:bootstrap": "tsx scripts/stripe-bootstrap.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.77.0",
@@ -51,6 +52,7 @@
     "prisma": "^6",
     "react": "^19",
     "react-dom": "^19",
+    "stripe": "^22.5.0",
     "zod": "^3"
   },
   "devDependencies": {

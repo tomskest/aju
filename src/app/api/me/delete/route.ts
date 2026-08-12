@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { prisma, tenantDbFor } from "@/lib/db";
 import { clearActiveOrganizationCookie, clearSessionCookie } from "@/lib/auth";
+import {
+  cancelStripeSubscription,
+  SubscriptionCancelError,
+  syncSeatsToStripe,
+} from "@/lib/billing";
 import { deleteOrganizationWithStorage } from "@/lib/vault";
 import { authedUserRoute } from "@/lib/route-helpers";
 
@@ -58,6 +63,18 @@ const handler = authedUserRoute(async ({ user, agentId }) => {
       r2Warnings.push(...res.r2Warnings);
       orgsDeleted += 1;
     } catch (err) {
+      // Stripe refused to cancel the org's Team subscription, so the org was
+      // left fully intact (cancellation runs before any teardown). Stop the
+      // whole account deletion here rather than pressing on: the User row
+      // could not be deleted anyway while an owned org remains, and a clean
+      // retryable error beats a mid-flight FK failure. Orgs already deleted
+      // in earlier iterations completed their cancellation.
+      if (err instanceof SubscriptionCancelError) {
+        return NextResponse.json(
+          { error: "billing_cancel_failed", organizationId: org.id },
+          { status: 502 },
+        );
+      }
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[me-delete] org ${org.id} failed:`, err);
       r2Warnings.push(`org delete failed id=${org.id}: ${msg}`);
@@ -106,11 +123,50 @@ const handler = authedUserRoute(async ({ user, agentId }) => {
     }
   }
 
+  // Capture the orgs this user was seated in before the rows disappear —
+  // afterwards there is no way to know which subscriptions to re-count.
+  const seatedOrgIds = (
+    await prisma.organizationMembership.findMany({
+      where: { userId },
+      select: { organizationId: true },
+    })
+  ).map((m) => m.organizationId);
+
   // Now drop the membership rows themselves. They'd cascade via User
   // delete below too, but explicit removal makes the order obvious.
   await prisma.organizationMembership.deleteMany({ where: { userId } });
 
+  // Release the seats this user occupied in any Team org. Sequential rather
+  // than parallel: a departing user is in a handful of orgs at most, and
+  // serialising keeps us well clear of Stripe's rate limit.
+  for (const organizationId of seatedOrgIds) {
+    await syncSeatsToStripe(organizationId);
+  }
+
   // --- 3. Delete the user row ----------------------------------------
+  // Cancel the user's own Pro subscription before the row that anchors it
+  // goes away. After the delete there is no login left to reach the portal
+  // from and the renewal webhooks resolve to an unknown user, so Stripe
+  // would keep charging the saved card with no self-service way to stop it.
+  // Owned orgs' Team subscriptions were already canceled inside
+  // deleteOrganizationWithStorage above. A Stripe failure here aborts the
+  // account deletion; the account still exists, so the user can retry.
+  const billing = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { stripeSubscriptionId: true },
+  });
+  if (billing?.stripeSubscriptionId) {
+    try {
+      await cancelStripeSubscription(billing.stripeSubscriptionId);
+    } catch {
+      // Already logged inside cancelStripeSubscription.
+      return NextResponse.json(
+        { error: "billing_cancel_failed" },
+        { status: 502 },
+      );
+    }
+  }
+
   // sessions, accounts, api_keys, memberships cascade on User delete
   // per schema.prisma.
   await prisma.user.delete({ where: { id: userId } }).catch((err) => {

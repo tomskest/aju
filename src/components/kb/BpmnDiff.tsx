@@ -37,9 +37,19 @@ type Props = {
   /**
    * Restrict to a single diagram by its position in the document. Used
    * when the diff is opened from one figure in the document body, where
-   * comparing every diagram in the file would be noise.
+   * comparing every diagram in the file would be noise. The position
+   * comes from the DOM enumeration of rendered figures, which counts
+   * fence shapes (blockquoted, deeply indented) that the raw-markdown
+   * scanner skips, so a unique `onlySource` match wins over this index.
    */
   only?: number;
+  /**
+   * Raw source of the clicked fence, straight from the rendered code
+   * block. Lets `only` be resolved by content rather than position, so
+   * the two enumerations disagreeing does not silently diff the wrong
+   * diagram.
+   */
+  onlySource?: string;
 };
 
 type Layout = "stacked" | "columns";
@@ -92,13 +102,51 @@ async function loadDiffer() {
   return differPromise;
 }
 
-export default function BpmnDiff({ oldContent, newContent, oldLabel, newLabel, only }: Props) {
+export default function BpmnDiff({
+  oldContent,
+  newContent,
+  oldLabel,
+  newLabel,
+  only,
+  onlySource,
+}: Props) {
   const oldFences = useMemo(() => extractBpmnFences(oldContent), [oldContent]);
   const newFences = useMemo(() => extractBpmnFences(newContent), [newContent]);
 
+  // Prefer resolving the clicked diagram by its source text: a unique
+  // exact match against the new version's fences is authoritative. An
+  // ambiguous match (the same diagram repeated verbatim) falls back to
+  // the positional index, which position genuinely disambiguates. Zero
+  // matches means the raw-markdown scanner cannot see the clicked fence
+  // at all (blockquoted or deeply indented fences render but never
+  // extract), so any positional pairing would silently show a different
+  // diagram; refuse rather than guess.
+  const effectiveOnly = useMemo<number | "unlocated" | undefined>(() => {
+    if (only === undefined || onlySource === undefined) return only;
+    const target = onlySource.trim();
+    const matches: number[] = [];
+    newFences.forEach((fence, i) => {
+      if (fence.trim() === target) matches.push(i);
+    });
+    if (matches.length === 1) return matches[0];
+    return matches.length === 0 ? "unlocated" : only;
+  }, [only, onlySource, newFences]);
+
+  if (effectiveOnly === "unlocated") {
+    return (
+      <p className="bpmn-diff-note">
+        Could not locate this diagram in the document source, so a reliable
+        comparison is not possible. Diagrams inside blockquotes or indented
+        lists render but cannot be matched to a version history.
+      </p>
+    );
+  }
+
   const pairCount = Math.max(oldFences.length, newFences.length);
   const indexes =
-    only === undefined ? Array.from({ length: pairCount }, (_, i) => i) : [only];
+    effectiveOnly === undefined
+      ? Array.from({ length: pairCount }, (_, i) => i)
+      : [effectiveOnly];
 
   if (pairCount === 0) {
     return (
@@ -108,18 +156,27 @@ export default function BpmnDiff({ oldContent, newContent, oldLabel, newLabel, o
     );
   }
 
-  if (only !== undefined && only >= pairCount) {
+  if (effectiveOnly !== undefined && effectiveOnly >= pairCount) {
     return <p className="bpmn-diff-note">That diagram does not exist in either version.</p>;
   }
 
   return (
     <div className="flex flex-col gap-6">
-      {only === undefined && oldFences.length !== newFences.length && (
-        <p className="bpmn-diff-note">
-          Diagram count changed: {oldFences.length} in {oldLabel}, {newFences.length} in{" "}
-          {newLabel}. Diagrams are paired in document order.
-        </p>
-      )}
+      {oldFences.length !== newFences.length &&
+        (effectiveOnly === undefined ? (
+          <p className="bpmn-diff-note">
+            Diagram count changed: {oldFences.length} in {oldLabel}, {newFences.length} in{" "}
+            {newLabel}. Diagrams are paired in document order.
+          </p>
+        ) : (
+          // Single-diagram mode pairs by position too, and here that can
+          // silently line this diagram up against a different one.
+          <p className="bpmn-diff-note">
+            Diagram count changed: {oldFences.length} in {oldLabel}, {newFences.length} in{" "}
+            {newLabel}. Diagrams pair by document position, so the {oldLabel} side may not
+            show this diagram.
+          </p>
+        ))}
       {indexes.map((i) => (
         <BpmnDiffPair
           key={i}

@@ -1,4 +1,8 @@
-import { Marked, type Tokens } from "marked";
+import {
+  Marked,
+  type Tokens,
+  type TokenizerAndRendererExtension,
+} from "marked";
 
 // A project-scoped Marked instance so we don't mutate the global default.
 // Raw HTML in the markdown is dropped rather than passed through, because KB
@@ -31,6 +35,37 @@ marked.use({
     },
   },
 });
+
+// Reader highlights: `==text==` renders as <mark>. Obsidian-flavoured
+// syntax, not GFM, so it needs a custom inline extension. The same raw
+// markers are what agents read in the source; rendering them keeps the
+// human view in sync with the annotation. Guards: no whitespace or `=`
+// hugging the inside of the markers, so `a == b` comparisons in prose
+// stay untouched (code spans are consumed by the codespan tokenizer
+// before this extension ever sees them).
+const highlightExtension: TokenizerAndRendererExtension = {
+  name: "highlight",
+  level: "inline",
+  start(src: string) {
+    const i = src.indexOf("==");
+    return i === -1 ? undefined : i;
+  },
+  tokenizer(src: string) {
+    const match = /^==(?![\s=])([\s\S]*?[^\s=])==(?!=)/.exec(src);
+    if (!match) return undefined;
+    return {
+      type: "highlight",
+      raw: match[0],
+      text: match[1],
+      tokens: this.lexer.inlineTokens(match[1]),
+    };
+  },
+  renderer(token) {
+    return `<mark>${this.parser.parseInline(token.tokens ?? [])}</mark>`;
+  },
+};
+
+marked.use({ extensions: [highlightExtension] });
 
 export function renderMarkdown(body: string): string {
   const result = marked.parse(body, { async: false });

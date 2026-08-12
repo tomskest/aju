@@ -198,7 +198,7 @@ server.tool(
 
 server.tool(
   "vault-read",
-  "Read the full content of a specific vault document by its path. Returns the complete markdown including frontmatter.",
+  "Read the full content of a specific vault document by its path. Returns the complete markdown including frontmatter. Reader annotations carry meaning: ~~struck text~~ was marked stale or wrong by a human reader (treat the claim as deprecated), and ==highlighted text== was flagged by a human reader as load-bearing. An HTML comment directly after the marker attributes the annotation, e.g. ~~text~~<!-- struck by user@org on 2026-08-12 -->.",
   {
     path: z
       .string()

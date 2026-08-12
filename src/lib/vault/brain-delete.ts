@@ -7,6 +7,7 @@ import { destroyTenant } from "@/lib/tenant";
 import { tenantDbFor } from "@/lib/db";
 import { storageFor, evictStorageHandle } from "@/lib/tenant";
 import { destroyTenantStorage } from "@/lib/storage";
+import { cancelStripeSubscription } from "@/lib/billing";
 
 type TenantTx = PrismaTenant.TransactionClient;
 
@@ -98,8 +99,9 @@ export async function cascadeDeleteBrainRows(
 }
 
 /**
- * Tear down an org: wipe every brain's S3 objects, drop the tenant DB entirely
- * via destroyTenant, then delete the organization row in the control plane.
+ * Tear down an org: cancel its Stripe subscription if it holds one, wipe
+ * every brain's S3 objects, drop the tenant DB entirely via destroyTenant,
+ * then delete the organization row in the control plane.
  *
  * Resilient to partial state. If a previous attempt already dropped the
  * Neon database but left the control rows behind, a retry skips the S3
@@ -118,6 +120,22 @@ export async function deleteOrganizationWithStorage(
   let brainsDeleted = 0;
   let r2ObjectsDeleted = 0;
   const r2Warnings: string[] = [];
+
+  // Billing first, before anything is torn down. An org holding a live Team
+  // subscription must stop billing when it dies: once the org row is gone
+  // the metadata on renewal webhooks resolves to nothing, and no member can
+  // reach the portal to cancel (memberships cascade away with the org). A
+  // Stripe failure here aborts the whole deletion, because a retryable
+  // failed delete beats a subscription that invoices a dead org forever.
+  // An org row that is already gone (retry of a partial teardown) or an
+  // already-canceled subscription both fall through as success.
+  const orgBilling = await prisma.organization.findUnique({
+    where: { id: organizationId },
+    select: { stripeSubscriptionId: true },
+  });
+  if (orgBilling?.stripeSubscriptionId) {
+    await cancelStripeSubscription(orgBilling.stripeSubscriptionId);
+  }
 
   // S3 wipe is best-effort. If the tenant DB is already gone (previous
   // attempt's destroyTenant succeeded but a later step failed), we can't

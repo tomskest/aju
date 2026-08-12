@@ -4,6 +4,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { authedOrgRoute } from "@/lib/route-helpers";
 import { clientIp, recordAudit } from "@/lib/audit";
+import { syncSeatsToStripe } from "@/lib/billing";
 import { orgRoleSchema, validateBody } from "@/lib/validators";
 
 type Params = { id: string; userId: string };
@@ -105,7 +106,7 @@ export const DELETE = authedOrgRoute<Params>(
   async ({ req, user, organizationId, params }) => {
     const { userId: targetUserId } = params;
 
-    return prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx) => {
       await lockOwnerGuard(tx, organizationId);
 
       const target = await tx.organizationMembership.findUnique({
@@ -145,6 +146,13 @@ export const DELETE = authedOrgRoute<Params>(
 
       return NextResponse.json({ ok: true });
     });
+
+    // A seat was freed. Sync after the transaction commits, so Stripe is
+    // never told about a removal a rollback would have undone. Skipped on the
+    // error paths (not_found, last_owner), where membership is unchanged.
+    if (result.ok) await syncSeatsToStripe(organizationId);
+
+    return result;
   },
   { orgIdParam: "id", minRole: "admin" },
 );

@@ -84,6 +84,22 @@ body {
   font-style: italic;
 }
 
+/* Reader annotations, written into the markdown source by the selection
+ * toolbar: ~~strike~~ marks stale claims, ==highlight== flags
+ * load-bearing ones. Agents read the same markers in the raw source. */
+.kb-prose del {
+  color: var(--color-faint);
+  text-decoration: line-through;
+  text-decoration-color: rgba(239, 68, 68, 0.55);
+  text-decoration-thickness: 1px;
+}
+.kb-prose mark {
+  background: rgba(250, 204, 21, 0.14);
+  color: var(--color-ink);
+  padding: 0 3px;
+  border-radius: 3px;
+}
+
 .kb-prose h1,
 .kb-prose h2,
 .kb-prose h3,
@@ -852,8 +868,13 @@ body {
   height: calc(50vh - 5.5rem);
   min-height: 240px;
 }
-.bpmn-diff.is-fullscreen.bpmn-diff .bpmn-diff-panes.is-columns .bpmn-diff-canvas {
-  height: calc(100vh - 13rem);
+/* Gated like the is-columns grid itself: below 900px the panes stay
+ * stacked, and near-viewport-height canvases would just mean two whole
+ * screens of scrolling with no side-by-side view. */
+@media (min-width: 900px) {
+  .bpmn-diff.is-fullscreen.bpmn-diff .bpmn-diff-panes.is-columns .bpmn-diff-canvas {
+    height: calc(100vh - 13rem);
+  }
 }
 
 /* Diagram diff opened from the document body. */
@@ -889,8 +910,11 @@ body {
   height: calc(50vh - 8rem);
   min-height: 240px;
 }
-.bpmn-diff-overlay .bpmn-diff-panes.is-columns .bpmn-diff-canvas {
-  height: calc(100vh - 17rem);
+/* Same 900px gate as the is-columns grid; see above. */
+@media (min-width: 900px) {
+  .bpmn-diff-overlay .bpmn-diff-panes.is-columns .bpmn-diff-canvas {
+    height: calc(100vh - 17rem);
+  }
 }
 /* The overlay is already fullscreen; a second fullscreen control inside
  * it would just be a no-op the user has to reason about. */

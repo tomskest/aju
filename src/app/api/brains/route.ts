@@ -188,10 +188,11 @@ export async function POST(req: NextRequest) {
 
   const userId = auth.userId;
 
-  // Plan-limit gate: block a new brain if the caller has already hit their
-  // cross-tenant cap. Check BEFORE the unscoped write so we don't create a
-  // brain row we'd then need to roll back.
-  const limitErr = await enforceBrainsLimit(userId);
+  // Plan-limit gate: block a new brain once this org has hit the cap of
+  // whoever pays for it (its Team subscription, else the owner's tier). Check
+  // BEFORE the unscoped write so we don't create a brain row we'd then need
+  // to roll back.
+  const limitErr = await enforceBrainsLimit(organizationId);
   if (limitErr) return limitErr;
 
   // Create flow must be unscoped: the new brain id does not exist in the

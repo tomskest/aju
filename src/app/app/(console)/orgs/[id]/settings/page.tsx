@@ -5,8 +5,10 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { currentUser } from "@/lib/auth";
 import { deleteOrganizationWithStorage } from "@/lib/vault";
+import { SubscriptionCancelError } from "@/lib/billing";
 import { canManageMembers, canManageOrg, slugify, type OrgRole } from "@/lib/tenant";
 import { slackIntegrationEnabled } from "@/lib/agent/flags";
+import ManageBillingButton from "@/components/app/ManageBillingButton";
 
 export const dynamic = "force-dynamic";
 
@@ -139,6 +141,11 @@ async function deleteOrgAction(formData: FormData): Promise<void> {
     await deleteOrganizationWithStorage(orgId);
   } catch (err) {
     console.error(`[orgs/settings] deleteOrganizationWithStorage failed for ${orgId}:`, err);
+    // Deletion aborts before any teardown when Stripe refuses to cancel the
+    // org's Team subscription; tell the user it's billing, not the org.
+    if (err instanceof SubscriptionCancelError) {
+      redirect(`/app/orgs/${orgId}/settings?error=billing-cancel-failed`);
+    }
     redirect(`/app/orgs/${orgId}/settings?error=delete-failed`);
   }
   revalidatePath("/app", "layout");
@@ -152,6 +159,8 @@ const ERROR_MESSAGES: Record<string, string> = {
   "slug-collision": "couldn't allocate a slug. try again.",
   "cannot-delete-personal": "personal organizations cannot be deleted.",
   "delete-failed": "deletion failed — the org is still here. check server logs and try again.",
+  "billing-cancel-failed":
+    "couldn't cancel this org's subscription, so nothing was deleted. try again, or cancel it via manage billing first.",
   "confirm-mismatch": "the slug you typed didn't match.",
 };
 
@@ -178,6 +187,10 @@ export default async function OrgSettingsPage({ params, searchParams }: PageProp
           isPersonal: true,
           planTier: true,
           autoAcceptDomainRequests: true,
+          seatCount: true,
+          subscriptionStatus: true,
+          currentPeriodEnd: true,
+          cancelAtPeriodEnd: true,
         },
       },
     },
@@ -229,6 +242,85 @@ export default async function OrgSettingsPage({ params, searchParams }: PageProp
           </p>
           <p className="mt-1 text-[13px] text-[var(--color-ink)]">{okMessage}</p>
         </div>
+      )}
+
+      {/* Billing — hidden on personal orgs, whose caps come from the owner's
+          own plan rather than from a per-seat subscription this org holds. */}
+      {!org.isPersonal && canManage && (
+        <section className="flex flex-col gap-4 rounded-xl border border-white/10 bg-[var(--color-panel)]/85 p-5">
+          <div className="flex flex-col gap-1">
+            <p className="font-mono text-[11px] tracking-[0.24em] text-[var(--color-muted)] uppercase">
+              billing
+            </p>
+            <p className="text-[13px] leading-6 text-[var(--color-muted)]">
+              {org.planTier === "team"
+                ? "This organization is on Team, billed per accepted member. Seats follow membership automatically."
+                : "This organization inherits its caps from the owner's personal plan. Team gives it unlimited brains, pooled storage, and its own invoice."}
+            </p>
+          </div>
+
+          {org.planTier === "team" ? (
+            <>
+              <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+                <div className="flex flex-col gap-1">
+                  <dt className="font-mono text-[10px] tracking-[0.24em] text-[var(--color-faint)] uppercase">
+                    plan
+                  </dt>
+                  <dd className="font-mono text-[13px] text-[var(--color-ink)]">
+                    Team
+                  </dd>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <dt className="font-mono text-[10px] tracking-[0.24em] text-[var(--color-faint)] uppercase">
+                    seats
+                  </dt>
+                  <dd className="font-mono text-[13px] text-[var(--color-ink)]">
+                    {org.seatCount}
+                  </dd>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <dt className="font-mono text-[10px] tracking-[0.24em] text-[var(--color-faint)] uppercase">
+                    status
+                  </dt>
+                  <dd className="font-mono text-[13px] text-[var(--color-ink)]">
+                    {org.subscriptionStatus ?? "—"}
+                  </dd>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <dt className="font-mono text-[10px] tracking-[0.24em] text-[var(--color-faint)] uppercase">
+                    {org.cancelAtPeriodEnd ? "ends" : "renews"}
+                  </dt>
+                  <dd className="font-mono text-[13px] text-[var(--color-ink)]">
+                    {org.currentPeriodEnd
+                      ? org.currentPeriodEnd.toLocaleDateString("en-GB", {
+                          day: "numeric",
+                          month: "short",
+                          year: "numeric",
+                        })
+                      : "—"}
+                  </dd>
+                </div>
+              </dl>
+
+              {org.subscriptionStatus === "past_due" && (
+                <p className="rounded-lg border border-amber-400/30 bg-amber-400/[0.06] p-3 text-[12px] leading-6 text-amber-200">
+                  The last payment did not go through. Access is unaffected
+                  while Stripe retries, but update the card to avoid the
+                  subscription lapsing.
+                </p>
+              )}
+
+              <ManageBillingButton organizationId={org.id} />
+            </>
+          ) : (
+            <Link
+              href="/pricing"
+              className="inline-flex w-fit items-center justify-center rounded-lg bg-[var(--color-accent)] px-4 py-2 font-mono text-[11px] tracking-[0.2em] text-black uppercase transition-colors hover:bg-[var(--color-accent)]/85"
+            >
+              upgrade to team
+            </Link>
+          )}
+        </section>
       )}
 
       {/* Rename */}

@@ -3,9 +3,16 @@
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import KbProse from "@/components/kb/KbProse";
 import { hasBpmnFence } from "@/lib/bpmn/diff";
+import AnnotationToolbar from "./AnnotationToolbar";
+import {
+  annotateSource,
+  type AnnotateFailureReason,
+  type AnnotationKind,
+  type SelectionQuote,
+} from "@/lib/vault/annotate";
 import DocToc from "@/components/kb/DocToc";
 import LocalDate from "@/components/kb/LocalDate";
 import ValidationPicker from "./ValidationPicker";
@@ -66,6 +73,8 @@ type Props = {
   brainType: string;
   canWrite: boolean;
   canValidate: boolean;
+  /** Identity recorded on annotations, matching version-row changedBy. */
+  viewerIdentity: string;
   docs: DocSummary[];
   currentDoc: DocFull | null;
   currentPath: string | null;
@@ -88,10 +97,23 @@ type TreeNode = FolderNode | DocNode;
 
 type CreateMode = "doc" | "folder";
 
+// Reader-facing wording for anchor failures. The reasons come from
+// annotateSource; each message should tell the user what to do next.
+const ANNOTATE_NOTES: Record<AnnotateFailureReason, string> = {
+  too_short: "Select a few more characters to annotate.",
+  not_found: "Couldn't find this text in the source. Use edit instead.",
+  ambiguous: "This text appears in several places. Select a longer stretch.",
+  crosses_blocks: "Selection spans multiple blocks. Annotate one at a time.",
+  inside_code_block: "Code blocks can't be annotated. Use edit instead.",
+};
+
 /**
  * In-browser explorer for a single brain. Sidebar renders a recursive
  * folder tree inferred from doc paths; main pane shows the focused doc
- * and toggles into an edit textarea on demand.
+ * and toggles into an edit textarea on demand. Selecting text in the
+ * read view raises an annotation bar (strike/highlight) that writes the
+ * markers straight into the markdown source via the same CAS save path
+ * as the editor.
  *
  * Styled to match the public KB chrome — dark theme, mono labels,
  * accent-green active dots — so brain editing feels like a lightweight
@@ -102,6 +124,7 @@ export default function BrainExplorer({
   brainType,
   canWrite,
   canValidate,
+  viewerIdentity,
   docs,
   currentDoc,
   currentPath,
@@ -138,14 +161,29 @@ export default function BrainExplorer({
 
   // Diagram-level diff opened from the document body, so comparing a
   // process against an earlier version does not mean entering history
-  // mode and losing the document you were reading.
+  // mode and losing the document you were reading. `source` is the
+  // clicked fence's text, which lets BpmnDiff find the same diagram by
+  // content when its fence scanner counts blocks differently from the
+  // rendered DOM.
   const [diagramDiff, setDiagramDiff] = useState<{
     index: number;
+    source: string;
     pair: DiffPair;
     choices: VersionMeta[];
   } | null>(null);
   const [diagramDiffLoading, setDiagramDiffLoading] = useState(false);
   const [diagramDiffNote, setDiagramDiffNote] = useState<string | null>(null);
+  const diagramDiffNoteRef = useRef<HTMLDivElement | null>(null);
+  const diagramDiffOverlayRef = useRef<HTMLDivElement | null>(null);
+  // Every diagram-diff request carries a generation. Closing the overlay,
+  // entering edit mode, selecting a history version, or starting a newer
+  // request bumps it, so a slow fetch resolving for a dismissed request
+  // can no longer mount (or remount) the overlay.
+  const diagramDiffGen = useRef(0);
+  const closeDiagramDiff = useCallback(() => {
+    diagramDiffGen.current++;
+    setDiagramDiff(null);
+  }, []);
 
   // Validation state. Server-rendered initial value comes through
   // currentDoc.validation; ValidationPicker calls onChanged after a
@@ -180,6 +218,16 @@ export default function BrainExplorer({
 
   const mainRef = useRef<HTMLElement | null>(null);
   const articleRef = useRef<HTMLElement | null>(null);
+  const proseRef = useRef<HTMLDivElement | null>(null);
+
+  // Annotation bar state. `annotNote` is feedback for the last attempt
+  // (anchor failure or save error); it clears on doc navigation and when
+  // the user moves to a different selection (handled by the toolbar).
+  const [annotBusy, setAnnotBusy] = useState(false);
+  const [annotNote, setAnnotNote] = useState<string | null>(null);
+  useEffect(() => {
+    setAnnotNote(null);
+  }, [currentDoc?.id]);
 
   const tree = useMemo(() => buildTree(docs), [docs]);
 
@@ -254,6 +302,56 @@ export default function BrainExplorer({
     startTransition(() => router.refresh());
   };
 
+  // Anchor the reader's selection back to the markdown source, apply the
+  // marker, and save through the same CAS/merge path as the editor. The
+  // targeted edit is tiny, so a stale base almost always merges cleanly.
+  const handleAnnotate = async (kind: AnnotationKind, quote: SelectionQuote) => {
+    if (!currentDoc) return;
+    setAnnotNote(null);
+    // Attribution rides along as an HTML comment in the source, so
+    // agents reading the doc later know who flagged the claim and when.
+    const result = annotateSource(currentDoc.content, quote, kind, {
+      author: viewerIdentity,
+      date: new Date().toISOString().slice(0, 10),
+    });
+    if (!result.ok) {
+      setAnnotNote(ANNOTATE_NOTES[result.reason]);
+      return;
+    }
+    setAnnotBusy(true);
+    try {
+      const excerpt = quote.text.replace(/\s+/g, " ").trim().slice(0, 60);
+      const res = await fetch(
+        `/api/vault/update?brain=${encodeURIComponent(brainName)}`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            path: currentDoc.path,
+            content: result.content,
+            source: "web",
+            baseHash: currentDoc.contentHash,
+            baseContent: currentDoc.content,
+            message: `${result.action === "unwrapped" ? "un" : ""}${kind}: "${excerpt}"`,
+          }),
+        },
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setAnnotNote(
+          res.status === 409
+            ? "Document changed underneath. Reload and retry."
+            : body.error || "Annotation failed.",
+        );
+        return;
+      }
+      window.getSelection()?.removeAllRanges();
+      startTransition(() => router.refresh());
+    } finally {
+      setAnnotBusy(false);
+    }
+  };
+
   // ── History / versions ──────────────────────────────────────
   const fetchVersions = async () => {
     if (!currentDoc) return;
@@ -303,6 +401,9 @@ export default function BrainExplorer({
 
   const selectVersion = async (v: VersionMeta) => {
     if (!currentDoc) return;
+    // The version preview replaces the article body; a diagram diff still
+    // resolving (or open) on top of it would compare the wrong context.
+    closeDiagramDiff();
     setVersionDetailLoading(true);
     setSelectedVersion(null);
     setDiffPair(null);
@@ -350,8 +451,9 @@ export default function BrainExplorer({
   // than reading `versions` state, because KbProse wires its buttons
   // once per rendered document and would otherwise hold a closure from
   // before history was ever opened.
-  const openDiagramDiff = async (index: number) => {
+  const openDiagramDiff = async (index: number, source: string) => {
     if (!currentDoc) return;
+    const gen = ++diagramDiffGen.current;
     setDiagramDiffNote(null);
     setDiagramDiffLoading(true);
     try {
@@ -361,14 +463,29 @@ export default function BrainExplorer({
         limit: "100",
       });
       const res = await fetch(`/api/vault/document/versions?${params}`);
+      if (gen !== diagramDiffGen.current) return;
       if (!res.ok) {
         setDiagramDiffNote("Could not load version history for this document.");
         return;
       }
       const { versions: all } = (await res.json()) as { versions: VersionMeta[] };
+      if (gen !== diagramDiffGen.current) return;
       setVersions(all);
 
-      const head = all.find((v) => v.contentHash === currentDoc.contentHash);
+      // Auto-link rewrites the doc's contentHash without appending a
+      // version row, so the hash lookup misses whenever the head was
+      // last touched by auto-link. The highest-numbered version is
+      // content-equivalent to the head then (auto-link never rewrites
+      // inside fences) and stands in for it: `older` excludes it, the
+      // base defaults to the version before it, and a single-version
+      // doc still lands on the only-one-version note.
+      const headByHash = all.find((v) => v.contentHash === currentDoc.contentHash);
+      const head =
+        headByHash ??
+        all.reduce<VersionMeta | undefined>(
+          (max, v) => (max === undefined || v.versionN > max.versionN ? v : max),
+          undefined,
+        );
       const older = all
         .filter((v) => v.contentHash !== currentDoc.contentHash)
         .filter((v) => (head ? v.versionN < head.versionN : true))
@@ -380,6 +497,7 @@ export default function BrainExplorer({
       }
 
       const previous = await fetchVersionContent(older[0].versionN);
+      if (gen !== diagramDiffGen.current) return;
       if (!previous) {
         setDiagramDiffNote("Could not load the previous version.");
         return;
@@ -387,42 +505,98 @@ export default function BrainExplorer({
 
       setDiagramDiff({
         index,
+        source,
         choices: older,
         pair: {
           oldContent: previous.content,
           oldLabel: `v${previous.versionN}`,
           newContent: currentDoc.content,
-          newLabel: head ? `v${head.versionN} · head` : "head",
+          // Only a hash-confirmed head earns a version number; the
+          // stand-in is merely content-equivalent.
+          newLabel: headByHash ? `v${headByHash.versionN} · head` : "head",
         },
       });
+    } catch {
+      // Transport-level failures (offline, connection reset, aborted
+      // JSON parse) land here; HTTP error statuses are handled above.
+      if (gen === diagramDiffGen.current) {
+        setDiagramDiffNote("Could not load version history for this document.");
+      }
     } finally {
-      setDiagramDiffLoading(false);
+      if (gen === diagramDiffGen.current) setDiagramDiffLoading(false);
     }
   };
 
   const changeDiagramDiffBase = async (versionN: number) => {
     if (!diagramDiff) return;
+    const gen = diagramDiffGen.current;
     setDiagramDiffLoading(true);
     try {
       const older = await fetchVersionContent(versionN);
-      if (!older) return;
-      setDiagramDiff({
-        ...diagramDiff,
-        pair: {
-          ...diagramDiff.pair,
-          oldContent: older.content,
-          oldLabel: `v${older.versionN}`,
-        },
-      });
+      if (gen !== diagramDiffGen.current) return;
+      if (!older) {
+        setDiagramDiffNote("Could not load the previous version.");
+        return;
+      }
+      // Functional update that bails on null: if the overlay was closed
+      // while this fetch was in flight, the stale result must not reopen
+      // a dismissed overlay.
+      setDiagramDiff((cur) =>
+        cur
+          ? {
+              ...cur,
+              pair: {
+                ...cur.pair,
+                oldContent: older.content,
+                oldLabel: `v${older.versionN}`,
+              },
+            }
+          : cur,
+      );
+    } catch {
+      if (gen === diagramDiffGen.current) {
+        setDiagramDiffNote("Could not load the previous version.");
+      }
     } finally {
-      setDiagramDiffLoading(false);
+      if (gen === diagramDiffGen.current) setDiagramDiffLoading(false);
     }
   };
 
+  // KbProse's memo compares html alone, so a fresh arrow prop would be
+  // ignored after an edit that renders byte-identical HTML. The wired
+  // buttons therefore get one stable callback that always reaches the
+  // current render's openDiagramDiff (and with it the current doc)
+  // through a ref.
+  const openDiagramDiffRef = useRef(openDiagramDiff);
+  openDiagramDiffRef.current = openDiagramDiff;
+  const handleDiagramDiff = useCallback((index: number, source: string) => {
+    void openDiagramDiffRef.current(index, source);
+  }, []);
+
+  // Failure feedback renders above the prose while the clicked figure
+  // can sit a whole document further down; bring the note into view so
+  // the click never reads as a dead no-op.
   useEffect(() => {
-    if (!diagramDiff) return;
+    if (!diagramDiffNote) return;
+    diagramDiffNoteRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [diagramDiffNote]);
+
+  const diagramDiffOpen =
+    diagramDiff !== null && currentDoc !== null && !editing && selectedVersion === null;
+
+  useEffect(() => {
+    if (!diagramDiffOpen) return;
+    // The page behind the overlay is inert while it is open, so focus
+    // has to move inside it; otherwise keystrokes keep landing on the
+    // now-unreachable control that opened it.
+    diagramDiffOverlayRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setDiagramDiff(null);
+      if (e.key !== "Escape") return;
+      // The mermaid fullscreen stacks above this overlay and closes on
+      // its own document-level Escape listener; while it is up, one
+      // keypress must unwind only that topmost layer.
+      if (document.querySelector(".mermaid-fullscreen")) return;
+      closeDiagramDiff();
     };
     document.addEventListener("keydown", onKey);
     const prev = document.body.style.overflow;
@@ -431,7 +605,7 @@ export default function BrainExplorer({
       document.removeEventListener("keydown", onKey);
       document.body.style.overflow = prev;
     };
-  }, [diagramDiff]);
+  }, [diagramDiffOpen, closeDiagramDiff]);
 
   const restoreVersion = async (v: VersionDetail) => {
     if (!currentDoc) return;
@@ -534,7 +708,14 @@ export default function BrainExplorer({
   };
 
   return (
-    <div className="flex h-[calc(100vh-56px)]">
+    <div className="h-[calc(100vh-56px)]">
+      {/* Everything the diagram-diff overlay covers goes inert while it
+          is open: the overlay is opaque, so anything focusable under it
+          is an invisible keyboard trap (the z-50 create modal could even
+          mount below it). React 19 renders the boolean inert prop
+          natively; the overlay itself is a sibling of this wrapper so it
+          stays interactive. */}
+      <div className="flex h-full" inert={diagramDiffOpen}>
       {/* Sidebar */}
       <aside className="hidden w-[260px] shrink-0 flex-col overflow-hidden border-r border-white/5 bg-[var(--color-bg)] md:flex">
         <div className="border-b border-white/5 px-5 py-5">
@@ -629,6 +810,10 @@ export default function BrainExplorer({
                         onClick={() => {
                           setEditing(true);
                           setEditorContent(currentDoc.content);
+                          // The editor replaces the article body; a
+                          // diagram diff resolving mid-flight must not
+                          // surface an overlay on top of it.
+                          closeDiagramDiff();
                         }}
                         className="rounded-md border border-white/10 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--color-muted)] transition hover:border-white/20 hover:text-[var(--color-ink)]"
                       >
@@ -722,14 +907,19 @@ export default function BrainExplorer({
             ) : (
               <>
                 {diagramDiffNote && (
-                  <div className="mb-4 rounded-md border border-white/10 bg-[var(--color-panel)] px-3 py-2 font-mono text-[11px] text-[var(--color-muted)]">
+                  <div
+                    ref={diagramDiffNoteRef}
+                    className="mb-4 rounded-md border border-white/10 bg-[var(--color-panel)] px-3 py-2 font-mono text-[11px] text-[var(--color-muted)]"
+                  >
                     {diagramDiffNote}
                   </div>
                 )}
-                <KbProse
-                  html={currentDoc.rendered}
-                  onDiagramDiff={(index) => void openDiagramDiff(index)}
-                />
+                <div ref={proseRef}>
+                  <KbProse
+                    html={currentDoc.rendered}
+                    onDiagramDiff={handleDiagramDiff}
+                  />
+                </div>
               </>
             )}
           </article>
@@ -815,6 +1005,16 @@ export default function BrainExplorer({
         )}
       </main>
 
+      {canWrite && currentDoc && !editing && !selectedVersion && (
+        <AnnotationToolbar
+          containerRef={proseRef}
+          busy={annotBusy || isPending}
+          note={annotNote}
+          onAnnotate={handleAnnotate}
+          onDismissNote={() => setAnnotNote(null)}
+        />
+      )}
+
       {creating && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-lg border border-white/10 bg-[var(--color-panel)] p-6">
@@ -871,9 +1071,12 @@ export default function BrainExplorer({
           </div>
         </div>
       )}
+      </div>
 
-      {diagramDiff && currentDoc && (
+      {diagramDiff && currentDoc && !editing && !selectedVersion && (
         <div
+          ref={diagramDiffOverlayRef}
+          tabIndex={-1}
           className="bpmn-diff-overlay"
           role="dialog"
           aria-modal="true"
@@ -908,7 +1111,7 @@ export default function BrainExplorer({
               </select>
               <button
                 type="button"
-                onClick={() => setDiagramDiff(null)}
+                onClick={closeDiagramDiff}
                 className="rounded-md border border-white/10 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--color-muted)] transition hover:border-white/20 hover:text-[var(--color-ink)]"
               >
                 close
@@ -922,6 +1125,7 @@ export default function BrainExplorer({
               oldLabel={diagramDiff.pair.oldLabel}
               newLabel={diagramDiff.pair.newLabel}
               only={diagramDiff.index}
+              onlySource={diagramDiff.source}
             />
           </div>
         </div>
