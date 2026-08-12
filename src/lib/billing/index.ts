@@ -9,7 +9,6 @@
  * `plan-limits`: the client is built lazily on first use, so pulling this
  * barrel into a write route doesn't require Stripe env to be present.
  */
-export * from "./beta";
 export * from "./plan-limits";
 export * from "./public-email-blocklist";
 export * from "./stripe";

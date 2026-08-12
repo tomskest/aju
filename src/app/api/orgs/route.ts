@@ -116,7 +116,7 @@ export const POST = authedUserRoute(async ({ req, user, agentId }) => {
             slug: candidate,
             isPersonal: false,
             ownerUserId: user.id,
-            planTier: "beta_legacy",
+            planTier: "free",
           },
           select: { id: true, name: true, slug: true },
         });

@@ -44,7 +44,7 @@ async function createOrgAction(formData: FormData): Promise<void> {
             slug: candidate,
             isPersonal: false,
             ownerUserId: user.id,
-            planTier: "beta_legacy",
+            planTier: "free",
           },
           select: { id: true },
         });

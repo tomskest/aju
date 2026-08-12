@@ -248,16 +248,6 @@ export default async function PricingPage() {
           <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
             <div className="flex flex-col gap-1.5">
               <p className="font-mono text-[12px] text-[var(--color-ink)]">
-                Beta cohort keeps its plan, free
-              </p>
-              <p className="text-[12px] leading-6 text-[var(--color-muted)]">
-                The first hundred signups stay on their beta caps at no cost,
-                indefinitely. You were here first; you don&rsquo;t get an
-                invoice for it.
-              </p>
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <p className="font-mono text-[12px] text-[var(--color-ink)]">
                 Pro and Team stack
               </p>
               <p className="text-[12px] leading-6 text-[var(--color-muted)]">

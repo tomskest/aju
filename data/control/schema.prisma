@@ -261,7 +261,7 @@ model Organization {
   slug                     String   @unique
   isPersonal               Boolean  @default(false) @map("is_personal")
   ownerUserId              String   @map("owner_user_id")
-  planTier                 String   @default("beta_legacy") @map("plan_tier")
+  planTier                 String   @default("free") @map("plan_tier")
   autoAcceptDomainRequests Boolean  @default(false) @map("auto_accept_domain_requests")
 
   // Billing — the org is the Stripe customer for the per-seat Team plan.

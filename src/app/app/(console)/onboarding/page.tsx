@@ -1,5 +1,4 @@
 import OnboardingFlow from "@/components/app/OnboardingFlow";
-import { betaEndHumanDate } from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import { currentUser } from "@/lib/auth";
 
@@ -28,7 +27,7 @@ export default async function OnboardingPage() {
             welcome, {ctx.user.name}.
           </h2>
           <p className="font-mono text-[12px] text-[var(--color-muted)]">
-            you are aju #{ctx.placement} of 100 · beta runs through {betaEndHumanDate()}
+            you are aju #{ctx.placement} of 100 · your plan stays free
           </p>
           <p className="mt-2 max-w-[520px] text-[13px] leading-6 text-[var(--color-muted)]">
             your personal brain is ready. choose how you want to drive aju —
