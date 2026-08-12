@@ -4,24 +4,16 @@ import { prisma } from "@/lib/db";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const COHORT_CAP = 100;
-
 type PublicStats = {
-  grandfathered: number;
-  cap: number;
-  remaining: number;
+  users: number;
   updatedAt: string;
 };
 
 export async function GET() {
-  const grandfathered = await prisma.user.count({
-    where: { grandfatheredAt: { not: null } },
-  });
+  const users = await prisma.user.count();
 
   const stats: PublicStats = {
-    grandfathered,
-    cap: COHORT_CAP,
-    remaining: Math.max(0, COHORT_CAP - grandfathered),
+    users,
     updatedAt: new Date().toISOString(),
   };
 

@@ -19,18 +19,14 @@ import WikilinkRain from "@/components/landing/WikilinkRain";
 
 export const dynamic = "force-dynamic";
 
-const COHORT_CAP = 100;
-
 async function getStats() {
   try {
-    const grandfathered = await prisma.user.count({
-      where: { grandfatheredAt: { not: null } },
-    });
-    return { grandfathered, cap: COHORT_CAP };
+    const users = await prisma.user.count();
+    return { users };
   } catch {
     // If the DB isn't reachable, render the landing with a zero counter rather
     // than crashing. Users can still see the page.
-    return { grandfathered: 0, cap: COHORT_CAP };
+    return { users: 0 };
   }
 }
 
@@ -77,11 +73,10 @@ export default async function Home({
 }: {
   searchParams: Promise<{ return_to?: string; email?: string }>;
 }) {
-  const [{ grandfathered, cap }, signedInUser] = await Promise.all([
+  const [{ users }, signedInUser] = await Promise.all([
     getStats(),
     currentUser().catch(() => null),
   ]);
-  const cohortOpen = grandfathered < cap;
   const siteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? "";
   const params = await searchParams;
   const returnTo = safeReturnTo(params.return_to);
@@ -164,19 +159,11 @@ export default async function Home({
               </p>
 
               <div className="mt-6 max-w-[460px]">
-                {cohortOpen ? (
-                  <SignupForm
-                    siteKey={siteKey}
-                    returnTo={returnTo}
-                    initialEmail={initialEmail}
-                  />
-                ) : (
-                  <div className="w-full rounded-xl border border-white/10 bg-[var(--color-panel)]/85 px-4 py-4 text-center">
-                    <p className="m-0 text-[13px] text-[var(--color-ink)]">
-                      beta cohort is full. paid signups coming next.
-                    </p>
-                  </div>
-                )}
+                <SignupForm
+                  siteKey={siteKey}
+                  returnTo={returnTo}
+                  initialEmail={initialEmail}
+                />
               </div>
 
               <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-2 font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--color-faint)]">
@@ -195,10 +182,8 @@ export default async function Home({
                 </Link>
                 <span className="text-[var(--color-faint)]">·</span>
                 <span>
-                  <span className="text-[var(--color-accent)]">
-                    {grandfathered}/{cap}
-                  </span>{" "}
-                  ajus · {Math.max(0, cap - grandfathered)} left
+                  <span className="text-[var(--color-accent)]">{users}</span>{" "}
+                  ajus
                 </span>
               </div>
             </div>
@@ -236,7 +221,7 @@ export default async function Home({
       <SdksSection />
       <AgentsSection />
       <UseCases />
-      <CloseSection grandfathered={grandfathered} cap={cap} />
+      <CloseSection users={users} />
       <SiteFooter />
     </div>
   );

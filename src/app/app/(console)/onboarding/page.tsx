@@ -1,4 +1,3 @@
-import BetaCountdown from "@/components/beta/BetaCountdown";
 import OnboardingFlow from "@/components/app/OnboardingFlow";
 import { betaEndHumanDate } from "@/lib/billing";
 import { prisma } from "@/lib/db";
@@ -39,8 +38,6 @@ export default async function OnboardingPage() {
           </p>
         </section>
       )}
-
-      <BetaCountdown />
 
       <section className="flex flex-col gap-2">
         <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-[var(--color-muted)]">

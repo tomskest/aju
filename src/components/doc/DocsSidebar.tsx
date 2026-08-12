@@ -18,7 +18,8 @@ const NAV: NavItem[] = [
   { label: "Claude Code", href: "/doc/claude-code" },
   { label: "MCP (advanced)", href: "/doc/mcp" },
   { label: "Self-host", href: "/doc/self-host" },
-  { label: "Beta plan", href: "/doc/beta-plan" },
+  { label: "Beta legacy plan", href: "/doc/beta-plan" },
+  { label: "Pricing", href: "/pricing" },
 ];
 
 function isActive(pathname: string | null, href: string) {

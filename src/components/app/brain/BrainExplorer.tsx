@@ -914,7 +914,7 @@ export default function BrainExplorer({
                     {diagramDiffNote}
                   </div>
                 )}
-                <div ref={proseRef}>
+                <div ref={proseRef} className="annotatable">
                   <KbProse
                     html={currentDoc.rendered}
                     onDiagramDiff={handleDiagramDiff}

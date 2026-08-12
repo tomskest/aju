@@ -1,13 +1,7 @@
 import Link from "next/link";
 import InstallBlock from "./InstallBlock";
 
-export default function CloseSection({
-  grandfathered,
-  cap,
-}: {
-  grandfathered: number;
-  cap: number;
-}) {
+export default function CloseSection({ users }: { users: number }) {
   return (
     <section className="relative z-[2] pb-24 pt-[120px] text-center">
       <div className="mx-auto max-w-[1120px] px-8">
@@ -24,10 +18,12 @@ export default function CloseSection({
         <div className="mx-auto max-w-[520px]">
           <InstallBlock />
           <p className="mt-4 font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--color-faint)]">
-            <span className="text-[var(--color-accent)]">
-              {grandfathered} / {cap}
-            </span>{" "}
-            &nbsp;·&nbsp; beta cohort filling &nbsp;·&nbsp;{" "}
+            <span className="text-[var(--color-accent)]">{users}</span> ajus
+            &nbsp;·&nbsp;{" "}
+            <Link href="/pricing" className="text-[var(--color-faint)] hover:text-[var(--color-muted)]">
+              pricing ↗
+            </Link>{" "}
+            &nbsp;·&nbsp;{" "}
             <Link href="/kb" className="text-[var(--color-faint)] hover:text-[var(--color-muted)]">
               read the kb ↗
             </Link>

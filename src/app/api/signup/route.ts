@@ -11,7 +11,6 @@ import { normalizeEmail } from "@/lib/validators";
 
 export const runtime = "nodejs";
 
-const COHORT_CAP = 100;
 const VERIFICATION_TTL_MIN = 30;
 
 type Payload = {
@@ -69,22 +68,6 @@ export async function POST(req: NextRequest) {
   const turnstile = await verifyTurnstile(turnstileToken, remoteIp);
   if (!turnstile.ok) {
     return NextResponse.json({ error: "turnstile_failed", detail: turnstile.error }, { status: 400 });
-  }
-
-  // If cohort is already full and this email isn't already a grandfathered user,
-  // add them to the waitlist and short-circuit — no magic link, just confirmation.
-  const [grandfatheredCount, existingUser] = await Promise.all([
-    prisma.user.count({ where: { grandfatheredAt: { not: null } } }),
-    prisma.user.findUnique({ where: { email } }),
-  ]);
-
-  if (!existingUser && grandfatheredCount >= COHORT_CAP) {
-    await prisma.waitlistEntry.upsert({
-      where: { email },
-      create: { email, source: "landing" },
-      update: {},
-    });
-    return NextResponse.json({ status: "waitlisted" });
   }
 
   // Best-effort: if this email's domain is already claimed by a verified org,

@@ -9,7 +9,6 @@ type Status =
   | { kind: "idle" }
   | { kind: "submitting" }
   | { kind: "sent" }
-  | { kind: "waitlisted" }
   | { kind: "error"; message: string };
 
 export default function LoginDropdown({
@@ -117,11 +116,7 @@ export default function LoginDropdown({
       });
       const data = (await res.json()) as { status?: string; error?: string };
       if (!res.ok) throw new Error(data.error ?? `http_${res.status}`);
-      if (data.status === "waitlisted") {
-        setStatus({ kind: "waitlisted" });
-      } else {
-        setStatus({ kind: "sent" });
-      }
+      setStatus({ kind: "sent" });
     } catch (err) {
       setStatus({
         kind: "error",
@@ -175,12 +170,6 @@ export default function LoginDropdown({
               <p className="text-[13px] text-[var(--color-ink)]">
                 <span className="text-[var(--color-accent)]">✓</span> check your
                 inbox for a sign-in link.
-              </p>
-            </div>
-          ) : status.kind === "waitlisted" ? (
-            <div className="px-4 py-4">
-              <p className="text-[13px] text-[var(--color-ink)]">
-                beta cohort is full — you&apos;re on the waitlist.
               </p>
             </div>
           ) : (

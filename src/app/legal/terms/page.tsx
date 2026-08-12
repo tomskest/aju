@@ -90,14 +90,12 @@ export default function TermsPage() {
               4. Beta Program
             </h2>
             <p className="mt-2">
-              The closed beta runs through 30 June 2026. Users who sign up
-              during the beta window (&ldquo;Beta Cohort&rdquo;) receive free
-              access to the beta plan limits for the duration of that window.
-              After 30 June 2026, the service may transition to a paid model,
-              a reduced free tier, or another arrangement to be announced
-              before that date. TARK Technology OÜ will communicate any such
-              transition to Beta Cohort members by email at least fourteen
-              (14) days in advance.
+              The closed beta ran through 30 June 2026. Users who signed up
+              during the beta window (&ldquo;Beta Cohort&rdquo;) remain on the
+              beta plan limits at no cost. Paid plans for all other accounts
+              are described on the pricing page. TARK Technology OÜ will
+              communicate any change to the Beta Cohort arrangement by email
+              at least fourteen (14) days in advance.
             </p>
             <p className="mt-2">
               Regardless of the transition outcome, your content remains your

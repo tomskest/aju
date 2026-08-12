@@ -2,8 +2,6 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { currentUser } from "@/lib/auth";
-import { betaEndHumanDate } from "@/lib/billing";
-import BetaCountdown from "@/components/beta/BetaCountdown";
 
 export const dynamic = "force-dynamic";
 
@@ -76,8 +74,6 @@ export default async function ConsoleHome() {
         </h1>
       </section>
 
-      <BetaCountdown />
-
       {placement !== null && (
         <section className="rounded-xl border border-white/10 bg-[var(--color-panel)]/85 p-5">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -86,11 +82,11 @@ export default async function ConsoleHome() {
                 ✓ beta legacy plan
               </p>
               <p className="font-mono text-[13px] text-[var(--color-ink)]">
-                you are aju #{placement} of 100 · beta runs through {betaEndHumanDate()}
+                you are aju #{placement} of 100 · your plan stays free
               </p>
               <p className="text-[12px] text-[var(--color-muted)]">
-                transition plan finalised before the beta closes. your data is
-                yours either way — export anytime via{" "}
+                the beta cohort keeps its plan at no cost. your data is yours
+                either way — export anytime via{" "}
                 <span className="font-mono text-[var(--color-ink)]">
                   aju export
                 </span>

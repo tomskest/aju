@@ -20,37 +20,34 @@ export default async function WaitlistPage({
 
           <div className="flex flex-col items-center gap-2">
             <p className="font-mono text-[11px] uppercase tracking-[0.32em] text-[var(--color-muted)]">
-              beta full
+              signups are open
             </p>
             <h1 className="text-[20px] font-light">
-              the grandfather cohort is closed.
+              the waitlist is over — you can sign up now.
             </h1>
           </div>
 
           <div className="w-full rounded-xl border border-white/10 bg-[var(--color-panel)]/85 p-5 text-center">
             <p className="text-[13px] text-[var(--color-ink)]">
-              {email ? (
-                <>
-                  we&apos;ve added{" "}
-                  <code className="font-mono text-[12px] text-[var(--color-accent)]">
-                    {email}
-                  </code>{" "}
-                  to the waitlist.
-                </>
-              ) : (
-                <>we&apos;ll email you when paid signups open.</>
-              )}
+              create your account on the free tier and upgrade whenever you
+              need more room.
             </p>
             <p className="mt-3 font-mono text-[11px] text-[var(--color-muted)]">
-              expected: once stripe + paid tiers ship.
+              plans at{" "}
+              <Link
+                href="/pricing"
+                className="text-[var(--color-accent)] underline-offset-4 hover:underline"
+              >
+                /pricing
+              </Link>
             </p>
           </div>
 
           <Link
-            href="/"
-            className="font-mono text-[11px] text-[var(--color-muted)] underline-offset-4 hover:underline hover:text-[var(--color-ink)]"
+            href={email ? `/?email=${encodeURIComponent(email)}` : "/"}
+            className="inline-flex items-center rounded-md border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 px-4 py-2 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--color-accent)] transition hover:border-[var(--color-accent)]/70 hover:bg-[var(--color-accent)]/20"
           >
-            ← back
+            sign up →
           </Link>
         </div>
       </main>

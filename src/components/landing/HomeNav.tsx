@@ -8,6 +8,7 @@ const LINKS = [
   { href: "#mcp", label: "mcp" },
   { href: "#agents", label: "agents" },
   { href: "#cases", label: "in the wild" },
+  { href: "/pricing", label: "pricing" },
   { href: "/kb", label: "kb ↗" },
 ];
 
@@ -23,7 +24,7 @@ export default function HomeNav({ rightSlot }: { rightSlot?: ReactNode }) {
         </Link>
         <span className="inline-flex items-center gap-1.5 rounded border border-[var(--color-accent)]/35 bg-[var(--color-accent)]/5 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.28em] text-[var(--color-accent)]">
           <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-accent)] shadow-[0_0_8px_rgba(34,197,94,0.7)] animate-[aju-pulse_1.8s_ease-in-out_infinite]" />
-          open beta
+          memory for ai agents
         </span>
       </div>
 

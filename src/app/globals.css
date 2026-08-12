@@ -87,6 +87,22 @@ body {
 /* Reader annotations, written into the markdown source by the selection
  * toolbar: ~~strike~~ marks stale claims, ==highlight== flags
  * load-bearing ones. Agents read the same markers in the raw source. */
+@keyframes annot-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+/* In the annotatable reader (brain explorer), tapping an annotation
+ * selects the whole span so it can be toggled off from the toolbar. */
+.annotatable del,
+.annotatable mark {
+  cursor: pointer;
+}
 .kb-prose del {
   color: var(--color-faint);
   text-decoration: line-through;

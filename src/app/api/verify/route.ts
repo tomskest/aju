@@ -11,7 +11,6 @@ import { slugify } from "@/lib/tenant";
 
 export const runtime = "nodejs";
 
-const COHORT_CAP = 100;
 const SLUG_RETRY_LIMIT = 3;
 
 function redirect(req: NextRequest, path: string) {
@@ -102,8 +101,8 @@ export async function GET(req: NextRequest) {
     req.nextUrl.searchParams.get("matched_org"),
   );
 
-  // Find + validate the verification row. Don't delete it yet — we want the
-  // whole thing to be transactional so nobody can race past the 100 cap.
+  // Find + validate the verification row. Don't delete it yet — consuming
+  // the token and writing the user stay in one transaction.
   const verification = await prisma.verification.findFirst({
     where: { value: token },
   });
@@ -117,7 +116,7 @@ export async function GET(req: NextRequest) {
   const email = verification.identifier.toLowerCase();
   const localPart = email.split("@")[0] ?? email;
 
-  // Atomic block: consume token, decide grandfather-vs-waitlist, write user.
+  // Atomic block: consume token, write user.
   const result = await prisma.$transaction(async (tx) => {
     // Consume the verification row (single-use)
     await tx.verification.delete({ where: { id: verification.id } });
@@ -132,21 +131,11 @@ export async function GET(req: NextRequest) {
       };
     }
 
-    const grandfatheredCount = await tx.user.count({
-      where: { grandfatheredAt: { not: null } },
-    });
-
-    if (grandfatheredCount >= COHORT_CAP) {
-      // Cohort closed. Record on waitlist and do NOT create a user account.
-      await tx.waitlistEntry.upsert({
-        where: { email },
-        create: { email, source: "landing" },
-        update: {},
-      });
-      return { waitlisted: true as const };
-    }
-
-    // --- Grandfather path: user + personal org + membership + brain ---
+    // --- New-user path: user + personal org + membership + brain ---
+    //
+    // Signups are open: new users start on the free tier and upgrade via
+    // /pricing. (The beta cohort was grandfathered onto beta_legacy before
+    // this; their rows keep grandfatheredAt + planTier untouched.)
     //
     // The chicken-and-egg: User.personalOrgId → Organization.id and
     // Organization.ownerUserId → User.id. Resolve by creating the user
@@ -159,8 +148,7 @@ export async function GET(req: NextRequest) {
         email,
         name: localPart,
         emailVerified: true,
-        grandfatheredAt: new Date(),
-        planTier: "beta_legacy",
+        planTier: "free",
       },
     });
 
@@ -181,7 +169,7 @@ export async function GET(req: NextRequest) {
             slug: candidate,
             isPersonal: true,
             ownerUserId: user.id,
-            planTier: "beta_legacy",
+            planTier: "free",
           },
           select: { id: true },
         });
@@ -222,14 +210,8 @@ export async function GET(req: NextRequest) {
     return { user, created: true, orgId: org.id };
   });
 
-  if ("waitlisted" in result && result.waitlisted) {
-    // returnTo is intentionally ignored for waitlisted users — the waitlist
-    // page is the terminal state for that flow.
-    return redirect(req, "/waitlist?email=" + encodeURIComponent(email));
-  }
-
   if ("user" in result && result.user) {
-    // If this is the grandfathered-new-user branch, the personal org was
+    // If this is the new-user branch, the personal org was
     // created inside the tx above but its per-tenant DB has not yet been
     // provisioned. Provisioning opens its own Neon API + Postgres
     // connections and must run outside the tx. On failure we still sign

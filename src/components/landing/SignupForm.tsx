@@ -30,7 +30,6 @@ type Status =
   | { kind: "idle" }
   | { kind: "submitting" }
   | { kind: "sent" }
-  | { kind: "waitlisted" }
   | { kind: "error"; message: string };
 
 export default function SignupForm({
@@ -115,11 +114,7 @@ export default function SignupForm({
       });
       const data = (await res.json()) as { status?: string; error?: string };
       if (!res.ok) throw new Error(data.error ?? `http_${res.status}`);
-      if (data.status === "waitlisted") {
-        setStatus({ kind: "waitlisted" });
-      } else {
-        setStatus({ kind: "sent" });
-      }
+      setStatus({ kind: "sent" });
     } catch (err) {
       setStatus({
         kind: "error",
@@ -141,20 +136,7 @@ export default function SignupForm({
           for a sign-in link.
         </p>
         <p className="mt-1 text-center font-mono text-[11px] text-[var(--color-muted)]">
-          click the link to claim your slot.
-        </p>
-      </Panel>
-    );
-  }
-
-  if (status.kind === "waitlisted") {
-    return (
-      <Panel>
-        <p className="text-center text-[13px] text-[var(--color-ink)]">
-          beta cohort is full — you&apos;re on the waitlist.
-        </p>
-        <p className="mt-1 text-center font-mono text-[11px] text-[var(--color-muted)]">
-          we&apos;ll email when paid signups open.
+          click the link to sign in.
         </p>
       </Panel>
     );
@@ -197,7 +179,7 @@ export default function SignupForm({
       )}
 
       <p className="text-center font-mono text-[11px] text-[var(--color-faint)]">
-        new? reserves your beta slot · returning? sends a sign-in link
+        new? creates your account, free · returning? sends a sign-in link
       </p>
 
       {status.kind === "error" && (
