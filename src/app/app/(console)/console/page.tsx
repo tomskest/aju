@@ -1,9 +1,32 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
-import { currentUser } from "@/lib/auth";
+import { currentUser, getActiveOrganizationId } from "@/lib/auth";
+import {
+  effectiveTierForOrg,
+  isUnlimited,
+  limitsFor,
+  nextTierFor,
+  tierLabel,
+  type PlanTier,
+} from "@/lib/billing";
+import PlanBadge from "@/components/app/PlanBadge";
 
 export const dynamic = "force-dynamic";
+
+/** "20 brains, 20,000 documents per brain, 25 GB storage" */
+function capLine(tier: PlanTier | string): string {
+  const limits = limitsFor(tier);
+  const brains = isUnlimited(limits.brains)
+    ? "unlimited brains"
+    : `${limits.brains.toLocaleString("en-US")} brains`;
+  const docs = `${limits.documentsPerBrain.toLocaleString("en-US")} documents per brain`;
+  const storage =
+    limits.storageBytesMax >= 1024 ** 3
+      ? `${Math.round(limits.storageBytesMax / 1024 ** 3)} GB storage`
+      : `${Math.round(limits.storageBytesMax / 1024 ** 2)} MB storage`;
+  return `${brains}, ${docs}, ${storage}`;
+}
 
 type Tile = {
   title: string;
@@ -63,6 +86,25 @@ export default async function ConsoleHome() {
     });
   }
 
+  // Plan strip. Resolved against the ACTIVE ORG, matching what enforcement
+  // does: showing the user's personal tier would misreport the ceiling for
+  // anyone working inside a Team org. Skipped for the beta cohort, who have
+  // nothing to buy and shouldn't be sold to.
+  const organizationId = await getActiveOrganizationId();
+  const org = organizationId
+    ? await prisma.organization.findUnique({
+        where: { id: organizationId },
+        select: { isPersonal: true },
+      })
+    : null;
+  const orgTier: PlanTier = organizationId
+    ? await effectiveTierForOrg(organizationId)
+    : "free";
+  const upgradeTo =
+    placement === null
+      ? nextTierFor(orgTier, org ? !org.isPersonal : false)
+      : null;
+
   return (
     <div className="flex flex-col gap-10">
       <section className="flex flex-col gap-2">
@@ -73,6 +115,45 @@ export default async function ConsoleHome() {
           welcome, {user.name}
         </h1>
       </section>
+
+      {placement === null && (
+        <section className="rounded-xl border border-white/10 bg-[var(--color-panel)]/85 p-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-2">
+              <div className="flex flex-wrap items-center gap-3">
+                <PlanBadge planTier={orgTier} />
+                <span className="font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--color-faint)]">
+                  active org
+                </span>
+              </div>
+              <p className="text-[12px] leading-5 text-[var(--color-muted)]">
+                {capLine(orgTier)}.
+              </p>
+              {upgradeTo && (
+                <p className="text-[12px] leading-5 text-[var(--color-muted)]">
+                  {tierLabel(upgradeTo)} raises that to {capLine(upgradeTo)}.
+                </p>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-3 self-start">
+              {upgradeTo && (
+                <Link
+                  href="/pricing"
+                  className="rounded-md bg-[var(--color-accent)] px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-black transition-colors hover:bg-[var(--color-accent)]/85"
+                >
+                  upgrade to {upgradeTo}
+                </Link>
+              )}
+              <Link
+                href="/app/billing"
+                className="rounded-md border border-white/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--color-muted)] transition hover:border-white/20 hover:text-[var(--color-ink)]"
+              >
+                billing →
+              </Link>
+            </div>
+          </div>
+        </section>
+      )}
 
       {placement !== null && (
         <section className="rounded-xl border border-white/10 bg-[var(--color-panel)]/85 p-5">

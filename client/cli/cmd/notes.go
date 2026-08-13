@@ -270,6 +270,12 @@ row and shown in 'aju history' and in the web app's history panel.`,
 		return printFriendlyErr(err)
 	}
 	fmt.Printf("Created %s\n", path)
+	// Advisory the server attaches inside the last 20% before a plan cap. On
+	// stderr so it never pollutes piped stdout, and after the success line so
+	// it reads as a heads-up rather than a failure.
+	if notice, ok := resp["notice"].(string); ok && notice != "" {
+		fmt.Fprintln(os.Stderr, notice)
+	}
 	return nil
 }
 

@@ -10,6 +10,7 @@ import type {
   PrismaClient as PrismaClientTenant,
   Prisma as PrismaTenant,
 } from "@prisma/client-tenant";
+import { pricingUrl, TIER_LABELS, type LimitStatus } from "@/lib/billing";
 
 // ─── Types ──────────────────────────────────────────────
 
@@ -404,6 +405,44 @@ export function textResult(payload: unknown) {
 export function errorResult(message: string) {
   return {
     content: [{ type: "text" as const, text: JSON.stringify({ error: message }) }],
+    isError: true,
+  };
+}
+
+/**
+ * Tool error for a plan cap.
+ *
+ * Distinct from `errorResult` because the agent on the other end is the one
+ * who has to act on it: the payload names the tier to buy, carries an
+ * absolute pricing URL, and spells out in `action` what to tell the user. A
+ * cap is not a malfunction, so it must not read like one.
+ */
+export function planLimitResult(status: LimitStatus) {
+  const action = status.recommendedTier
+    ? `Stop and tell the user: they have reached their ${TIER_LABELS[status.planTier]} plan limit and can upgrade to ${TIER_LABELS[status.recommendedTier]} at ${pricingUrl()} to continue. Do not retry this write until they do.`
+    : `Stop and tell the user: they have reached their ${TIER_LABELS[status.planTier]} plan limit. Removing unused entries frees space. Do not retry this write.`;
+
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: JSON.stringify(
+          {
+            error: "plan_limit_reached",
+            limit: status.limit,
+            current: status.current,
+            max: status.max,
+            planTier: status.planTier,
+            message: status.message,
+            upgradeTo: status.recommendedTier,
+            upgradeUrl: status.recommendedTier ? pricingUrl() : null,
+            action,
+          },
+          null,
+          2,
+        ),
+      },
+    ],
     isError: true,
   };
 }

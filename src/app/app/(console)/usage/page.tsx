@@ -10,6 +10,7 @@ import {
   PLAN_LIMITS,
 } from "@/lib/billing";
 import ManageBillingButton from "@/components/app/ManageBillingButton";
+import PlanBadge from "@/components/app/PlanBadge";
 
 export const dynamic = "force-dynamic";
 
@@ -119,41 +120,6 @@ function UsageTile({ label, current, limit, format, hint }: TileProps) {
   );
 }
 
-function PlanBadge({
-  planTier,
-  grandfathered,
-}: {
-  planTier: string;
-  grandfathered: boolean;
-}) {
-  const isBetaLegacy = planTier === "beta_legacy";
-  const LABELS: Record<string, string> = {
-    beta_legacy: "Beta Legacy",
-    beta_founder: "Founder",
-    free: "Free",
-    pro: "Pro",
-    team: "Team",
-  };
-  const label = LABELS[planTier] ?? planTier;
-
-  // Paid and grandfathered tiers both get the accent treatment: one is earned,
-  // the other is bought, and neither should read as the default state.
-  const highlighted =
-    isBetaLegacy || planTier === "pro" || planTier === "team";
-  const tone = highlighted
-    ? "border-[var(--color-accent)]/40 bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
-    : "border-white/10 bg-white/[0.04] text-[var(--color-muted)]";
-
-  return (
-    <span
-      className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 font-mono text-[10px] uppercase tracking-[0.24em] ${tone}`}
-    >
-      {grandfathered && <span aria-hidden>✓</span>}
-      {label}
-    </span>
-  );
-}
-
 export default async function UsagePage() {
   const user = await currentUser();
   if (!user) redirect("/");
@@ -211,7 +177,10 @@ export default async function UsagePage() {
 
   // What can this user actually buy from here?
   const canBuyPro = user.planTier !== "pro" && !grandfathered;
-  const showManage = user.planTier === "pro";
+  // Gated on having a Stripe customer record rather than on the current tier:
+  // someone who cancels drops to free, and hiding the portal from them would
+  // take their own invoices and payment history with it.
+  const showManage = Boolean(user.stripeCustomerId);
 
   // Documents limit is per-brain × brain count (or a floor of 1 brain to
   // avoid showing "0 / 0" when a user has no brains yet).

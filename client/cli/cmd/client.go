@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -136,6 +137,27 @@ func parseBrainList(flagValue string, cfg *config.Config) []string {
 // printFriendlyErr translates typed httpx errors into user-facing one-liners.
 // It writes to stderr and returns ErrSilent so main.exitWith doesn't print the
 // error a second time. Unknown errors fall through unchanged.
+// planLimitMessage extracts the server's upgrade sentence from a 402
+// `plan_limit_reached` body. Reads httpErr.Body rather than httpErr.Message
+// because the latter is truncated to a 256-char snippet.
+func planLimitMessage(err error) (string, bool) {
+	var httpErr *httpx.Error
+	if !errors.As(err, &httpErr) || httpErr.Status != 402 {
+		return "", false
+	}
+	var payload struct {
+		Error   string `json:"error"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal([]byte(httpErr.Body), &payload) != nil {
+		return "", false
+	}
+	if payload.Error != "plan_limit_reached" || payload.Message == "" {
+		return "", false
+	}
+	return payload.Message, true
+}
+
 func printFriendlyErr(err error) error {
 	if err == nil {
 		return nil
@@ -146,6 +168,13 @@ func printFriendlyErr(err error) error {
 	}
 	if httpx.IsNetwork(err) {
 		fmt.Fprintf(os.Stderr, "Network error: %v\n", err)
+		return ErrSilent
+	}
+	// A plan cap is not a malfunction, and the raw `http 402: {json...}` dump
+	// reads like one. The server's message already names the tier and carries
+	// an absolute pricing URL, so print it on its own.
+	if msg, ok := planLimitMessage(err); ok {
+		fmt.Fprintln(os.Stderr, msg)
 		return ErrSilent
 	}
 	// HTTP errors and decode errors fall through — main prints them once.

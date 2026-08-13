@@ -16,6 +16,7 @@ const ITEMS: NavItem[] = [
   { label: "Brains", href: "/app/brains" },
   { label: "API Keys", href: "/app/keys" },
   { label: "Usage", href: "/app/usage" },
+  { label: "Billing", href: "/app/billing" },
 ];
 
 export default function Sidebar() {

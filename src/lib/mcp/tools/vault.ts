@@ -17,10 +17,16 @@ import { scheduleRebuildLinks } from "@/lib/vault";
 import { updateDocumentEmbedding } from "@/lib/embeddings";
 import { withTenant } from "@/lib/tenant";
 import {
+  checkDocumentsPerBrainLimit,
+  planNotice,
+  PlanLimitError,
+} from "@/lib/billing";
+import {
   canWrite,
   ctxPrincipalFilter,
   type McpToolContext,
   errorResult,
+  planLimitResult,
   requireOrgId,
   resolveBrainForTool,
   textResult,
@@ -173,13 +179,26 @@ export function registerVaultTools(server: McpServer, ctx: McpToolContext): void
     async ({ path, content, brain, message }) => {
       try {
         const organizationId = requireOrgId(ctx);
-        const { tenant, createdId, brainId, brainName } = await withTenant(
+        const { tenant, createdId, brainId, brainName, notice } = await withTenant(
           { organizationId, userId: ctx.userId, agentId: ctx.agentId },
           async ({ tenant, tx }) => {
             const b = await resolveBrainForTool(tx, ctx, brain);
             if (!canWrite(b)) {
               throw new Error(`Write access denied for brain: ${b.brainName}`);
             }
+
+            // Plan-limit gate. MCP writes go straight to the tenant DB rather
+            // than through /api/vault/create, so without this the caps that
+            // route enforces don't exist on the surface most agents actually
+            // use. Runs on `tx` for the same reason the HTTP route does: a
+            // parallel count on a second pooled connection can deadlock
+            // against the open interactive transaction.
+            const limit = await checkDocumentsPerBrainLimit(
+              tx,
+              b.brainId,
+              organizationId,
+            );
+            if (limit?.reached) throw new PlanLimitError(limit);
 
             const existing = await tx.vaultDocument.findFirst({
               where: { brainId: b.brainId, path },
@@ -243,6 +262,7 @@ export function registerVaultTools(server: McpServer, ctx: McpToolContext): void
               createdTitle: doc.title,
               brainId: b.brainId,
               brainName: b.brainName,
+              notice: planNotice(limit),
             };
           },
         );
@@ -260,8 +280,12 @@ export function registerVaultTools(server: McpServer, ctx: McpToolContext): void
           created: true,
           path,
           id: createdId,
+          // Present only in the last 20% before the cap. The write succeeded,
+          // so this is something to mention in passing, not to act on.
+          ...(notice ? { notice } : {}),
         });
       } catch (err) {
+        if (err instanceof PlanLimitError) return planLimitResult(err.status);
         return errorResult(String(err instanceof Error ? err.message : err));
       }
     },

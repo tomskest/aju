@@ -5,7 +5,12 @@ import {
   isUnlimited,
   limitsFor,
   isPaidTier,
+  nextTierFor,
+  planNotice,
+  WARN_AT,
+  type LimitStatus,
 } from "./plan-limits";
+import { tierLabel, isHighlightedTier } from "./tiers";
 import type { PlanTier } from "./plan-limits";
 import { tierForPriceId, priceIdFor, BILLING_SUBJECT } from "./catalog";
 import { applySubscription, subjectFrom } from "./subscription";
@@ -372,5 +377,107 @@ describe("applySubscription", () => {
       ),
     ).resolves.toBeUndefined();
     expect(db.user.update).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A status object as `buildStatus` would produce it. Handwritten rather than
+ * generated so the assertions below don't depend on a DB round-trip.
+ */
+function statusFixture(over: Partial<LimitStatus> = {}): LimitStatus {
+  return {
+    limit: "documentsPerBrain",
+    current: 85,
+    max: 100,
+    planTier: "free",
+    reached: false,
+    warning: true,
+    recommendedTier: "pro",
+    message: "Free plan: 85/100 documents in this brain used.",
+    ...over,
+  };
+}
+
+describe("upgrade recommendation", () => {
+  it("sends a personal free user to Pro", () => {
+    expect(nextTierFor("free", false)).toBe("pro");
+    expect(nextTierFor("beta_legacy", false)).toBe("pro");
+  });
+
+  it("sends a shared org to Team regardless of the current tier", () => {
+    // Pro is bought by a user and funds only the orgs they own, so selling it
+    // to someone working in a shared org would not raise the cap they hit.
+    expect(nextTierFor("free", true)).toBe("team");
+    expect(nextTierFor("pro", true)).toBe("team");
+  });
+
+  it("has nothing to sell a Pro user on their personal org", () => {
+    // Checkout refuses Team on a personal org, so recommending it would send
+    // them to a purchase that gets rejected.
+    expect(nextTierFor("pro", false)).toBeNull();
+  });
+
+  it("has nothing to sell the top tiers", () => {
+    for (const shared of [true, false]) {
+      expect(nextTierFor("team", shared)).toBeNull();
+      expect(nextTierFor("beta_founder", shared)).toBeNull();
+    }
+  });
+
+  it("only recommends tiers a customer can actually buy", () => {
+    for (const tier of ASCENDING) {
+      for (const shared of [true, false]) {
+        const next = nextTierFor(tier, shared);
+        if (next !== null) expect(isPaidTier(next)).toBe(true);
+      }
+    }
+  });
+});
+
+describe("planNotice", () => {
+  it("speaks only in the warning band", () => {
+    expect(planNotice(statusFixture())).toContain("85/100");
+  });
+
+  it("stays silent when usage is healthy", () => {
+    expect(planNotice(statusFixture({ warning: false }))).toBeNull();
+  });
+
+  it("stays silent once the cap is reached, where the 402 speaks instead", () => {
+    // Both flags can never be true at once, but a caller that hard-stops and
+    // then also emits an advisory would say the same thing twice.
+    expect(
+      planNotice(statusFixture({ warning: false, reached: true })),
+    ).toBeNull();
+  });
+
+  it("stays silent when there is nothing to measure", () => {
+    expect(planNotice(null)).toBeNull();
+  });
+
+  it("warns before the wall, not at it", () => {
+    expect(WARN_AT).toBeGreaterThan(0);
+    expect(WARN_AT).toBeLessThan(1);
+  });
+});
+
+describe("tier vocabulary", () => {
+  it("labels every tier", () => {
+    for (const tier of ASCENDING) {
+      expect(tierLabel(tier)).not.toBe("");
+      expect(tierLabel(tier)).not.toContain("_");
+    }
+  });
+
+  it("falls back to the raw value for an unknown tier", () => {
+    expect(tierLabel("enterprise")).toBe("enterprise");
+    expect(tierLabel(null)).toBe("Free");
+  });
+
+  it("highlights earned and bought tiers only", () => {
+    expect(isHighlightedTier("free")).toBe(false);
+    expect(isHighlightedTier("pro")).toBe(true);
+    expect(isHighlightedTier("team")).toBe(true);
+    expect(isHighlightedTier("beta_legacy")).toBe(true);
   });
 });

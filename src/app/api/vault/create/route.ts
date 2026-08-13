@@ -5,7 +5,11 @@ import { parseDocument } from "@/lib/vault";
 import { scheduleRebuildLinks, autoLinkDocument } from "@/lib/vault";
 import { updateDocumentEmbedding } from "@/lib/embeddings";
 import { resolveBrain, isBrainError, canWrite } from "@/lib/vault";
-import { enforceDocumentsPerBrainLimit } from "@/lib/billing";
+import {
+  checkDocumentsPerBrainLimit,
+  limitResponse,
+  planNotice,
+} from "@/lib/billing";
 import { authedTenantRoute } from "@/lib/route-helpers";
 import {
   commitMessageSchema,
@@ -64,12 +68,12 @@ export const POST = authedTenantRoute(
     //
     // Uses `tx` so the count shares the open interactive transaction instead
     // of racing it on a separate pgbouncer connection.
-    const limitErr = await enforceDocumentsPerBrainLimit(
+    const limit = await checkDocumentsPerBrainLimit(
       tx,
       brain.brainId,
       organizationId,
     );
-    if (limitErr) return limitErr;
+    if (limit?.reached) return limitResponse(limit);
 
     const validation = await validateBody(req, createDocSchema);
     if (!validation.ok) return validation.response;
@@ -172,7 +176,13 @@ export const POST = authedTenantRoute(
         );
     }
 
-    return NextResponse.json(doc, { status: 201 });
+    // The write succeeded; `notice` only appears inside the last 20% before
+    // the cap, so a client (or the agent driving one) can raise the ceiling
+    // in passing instead of discovering it as a hard 402 mid-task.
+    const notice = planNotice(limit);
+    return NextResponse.json(notice ? { ...doc, notice } : doc, {
+      status: 201,
+    });
   },
   { requiresScope: "write" },
 );

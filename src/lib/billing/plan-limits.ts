@@ -40,6 +40,8 @@ import type {
   Prisma as PrismaTenant,
 } from "@prisma/client-tenant";
 import { prisma, tenantDbFor } from "@/lib/db";
+import { appUrl } from "./stripe";
+import { TIER_LABELS } from "./tiers";
 
 /**
  * Stand-in for "no cap". A real number rather than Infinity because these
@@ -53,6 +55,46 @@ export const UNLIMITED = Number.MAX_SAFE_INTEGER;
 
 export function isUnlimited(value: number): boolean {
   return value >= UNLIMITED;
+}
+
+/**
+ * Fraction of a cap at which write paths start warning, while still allowing
+ * the write. A hard 402 is the worst possible moment to first mention that a
+ * plan exists: the caller has already composed the document. Warning early
+ * lets an agent raise it mid-flow, when the user is not blocked.
+ */
+export const WARN_AT = 0.8;
+
+export type LimitStatus = {
+  limit: HardCap;
+  current: number;
+  max: number;
+  planTier: PlanTier;
+  /** The cap is hit: the write must be refused. */
+  reached: boolean;
+  /** At or past WARN_AT but still under the cap: the write proceeds. */
+  warning: boolean;
+  /** The tier worth suggesting, or null when there is nothing better to sell. */
+  recommendedTier: PaidTier | null;
+  /**
+   * One line, written to be read by a person or relayed by an agent.
+   *
+   * It names the tier to buy and carries an absolute URL, because an MCP
+   * client has no origin to resolve `/pricing` against, and it stays short
+   * enough to survive the CLI's 256-character error snippet.
+   */
+  message: string;
+};
+
+/**
+ * Raised by write paths that are not HTTP routes (the MCP tools), so the
+ * caller can render a structured tool error rather than a bare string.
+ */
+export class PlanLimitError extends Error {
+  constructor(readonly status: LimitStatus) {
+    super(status.message);
+    this.name = "PlanLimitError";
+  }
 }
 
 export const PLAN_LIMITS = {
@@ -195,34 +237,146 @@ export async function bestTierForUser(userId: string): Promise<PlanTier> {
   return TIER_RANK[own] >= TIER_RANK.team ? own : "team";
 }
 
-function limitReached(
+const LIMIT_NOUNS: Record<HardCap, string> = {
+  brains: "brains",
+  documentsPerBrain: "documents in this brain",
+  apiKeysMax: "API keys",
+  storageBytesMax: "storage",
+};
+
+/** Storage reads as bytes; everything else is a plain count. */
+function formatAmount(limit: HardCap, value: number): string {
+  if (limit !== "storageBytesMax") return value.toLocaleString("en-US");
+  const mb = value / (1024 * 1024);
+  if (mb < 1024) return `${Math.round(mb)} MB`;
+  const gb = mb / 1024;
+  return `${gb.toFixed(gb >= 10 ? 0 : 1)} GB`;
+}
+
+export function pricingUrl(): string {
+  return `${appUrl()}/pricing`;
+}
+
+/**
+ * The tier worth suggesting next, given the current tier and whether the
+ * resource lives in a shared org.
+ *
+ * A cap hit inside a shared org recommends Team, not Pro: Pro is bought by a
+ * user and funds only the orgs that user owns, so selling it to someone
+ * working in a shared org would not raise the cap they just hit. Checkout
+ * enforces the mirror image of this rule and refuses Team on a personal org,
+ * which is why Pro on a personal org has nothing above it to sell.
+ */
+export function nextTierFor(
+  tier: PlanTier,
+  sharedOrg: boolean,
+): PaidTier | null {
+  if (tier === "team" || tier === "beta_founder") return null;
+  if (tier === "pro") return sharedOrg ? "team" : null;
+  return sharedOrg ? "team" : "pro";
+}
+
+async function recommendTier(
+  tier: PlanTier,
+  organizationId?: string,
+): Promise<PaidTier | null> {
+  if (tier === "team" || tier === "beta_founder") return null;
+
+  const sharedOrg = organizationId
+    ? await prisma.organization
+        .findUnique({
+          where: { id: organizationId },
+          select: { isPersonal: true },
+        })
+        .then((org) => org !== null && !org.isPersonal)
+        .catch(() => false)
+    : false;
+
+  return nextTierFor(tier, sharedOrg);
+}
+
+/**
+ * Assemble the status for one cap, including the sentence the API hands back.
+ *
+ * `organizationId` is only used to choose between Pro and Team, and is looked
+ * up lazily: it costs one control-plane query, and only on the paths that are
+ * already at or near a cap.
+ */
+async function buildStatus(
   limit: HardCap,
   current: number,
   max: number,
-  planTier: string,
-): NextResponse {
-  const friendlyNames: Record<HardCap, string> = {
-    brains: "brains",
-    documentsPerBrain: "documents in this brain",
-    apiKeysMax: "API keys",
-    storageBytesMax: "storage",
+  planTier: PlanTier,
+  organizationId?: string,
+  /**
+   * Storage weighs a projected total against the cap and allows a write that
+   * lands exactly on it, so it passes its own verdict instead of inheriting
+   * the `current >= max` rule the counted caps use.
+   */
+  reachedOverride?: boolean,
+): Promise<LimitStatus> {
+  const reached = reachedOverride ?? current >= max;
+  const warning = !reached && current >= max * WARN_AT;
+  const recommendedTier =
+    reached || warning ? await recommendTier(planTier, organizationId) : null;
+
+  const noun = LIMIT_NOUNS[limit];
+  const tally = `${formatAmount(limit, current)}/${formatAmount(limit, max)} ${noun}`;
+  const plan = TIER_LABELS[planTier];
+
+  let message: string;
+  if (recommendedTier) {
+    const raisedTo = formatAmount(limit, PLAN_LIMITS[recommendedTier][limit]);
+    const target = TIER_LABELS[recommendedTier];
+    message = reached
+      ? `${plan} plan limit reached: ${tally}. Upgrade to ${target} at ${pricingUrl()} to raise this to ${raisedTo}, or remove unused entries.`
+      : `${plan} plan: ${tally} used. Upgrade to ${target} at ${pricingUrl()} to raise this to ${raisedTo} before writes start failing.`;
+  } else {
+    message = reached
+      ? `${plan} plan limit reached: ${tally}. Remove unused entries or contact support to raise the cap.`
+      : `${plan} plan: ${tally} used.`;
+  }
+
+  return {
+    limit,
+    current,
+    max,
+    planTier,
+    reached,
+    warning,
+    recommendedTier,
+    message,
   };
-  const human = friendlyNames[limit];
-  const upgrade =
-    planTier === "team" || planTier === "beta_founder"
-      ? "Remove unused entries or contact support to raise the cap."
-      : "Upgrade at /pricing to raise the cap, or remove unused entries.";
+}
+
+/**
+ * The 402 body. `error`, `limit`, `current`, `max`, `planTier`, and `message`
+ * predate the upgrade fields and are kept exactly as they were, since the CLI
+ * and any existing integration parse them.
+ */
+export function limitResponse(status: LimitStatus): NextResponse {
   return NextResponse.json(
     {
       error: "plan_limit_reached",
-      limit,
-      current,
-      max,
-      planTier,
-      message: `You've hit the ${planTier} limit on ${human} (${current}/${max}). ${upgrade}`,
+      limit: status.limit,
+      current: status.current,
+      max: status.max,
+      planTier: status.planTier,
+      message: status.message,
+      upgradeTo: status.recommendedTier,
+      upgradeUrl: status.recommendedTier ? pricingUrl() : null,
     },
     { status: 402 },
   );
+}
+
+/**
+ * Advisory to attach to a SUCCESSFUL write when usage crosses WARN_AT, so a
+ * caller (or the agent driving it) can mention the ceiling before hitting it.
+ * Null when there is nothing to say.
+ */
+export function planNotice(status: LimitStatus | null): string | null {
+  return status?.warning ? status.message : null;
 }
 
 /**
@@ -236,9 +390,9 @@ function limitReached(
  * block writes, and the alternative (failing closed) turns a single tenant
  * outage into a total write outage.
  */
-export async function enforceBrainsLimit(
+export async function checkBrainsLimit(
   organizationId: string,
-): Promise<NextResponse | null> {
+): Promise<LimitStatus | null> {
   const tier = await effectiveTierForOrg(organizationId);
   const max = PLAN_LIMITS[tier].brains;
   if (isUnlimited(max)) return null;
@@ -250,24 +404,38 @@ export async function enforceBrainsLimit(
   } catch {
     return null;
   }
-  if (count >= max) return limitReached("brains", count, max, tier);
-  return null;
+  return buildStatus("brains", count, max, tier, organizationId);
+}
+
+export async function enforceBrainsLimit(
+  organizationId: string,
+): Promise<NextResponse | null> {
+  const status = await checkBrainsLimit(organizationId);
+  return status?.reached ? limitResponse(status) : null;
 }
 
 /**
  * Enforce the API-key cap: non-revoked keys on the control DB (user-keys and
  * agent-keys minted by this user both count, matching the usage page).
  */
-export async function enforceApiKeysLimit(
+export async function checkApiKeysLimit(
   userId: string,
-): Promise<NextResponse | null> {
+): Promise<LimitStatus | null> {
   const [tier, count] = await Promise.all([
     bestTierForUser(userId),
     prisma.apiKey.count({ where: { userId, revokedAt: null } }),
   ]);
   const max = PLAN_LIMITS[tier].apiKeysMax;
-  if (count >= max) return limitReached("apiKeysMax", count, max, tier);
-  return null;
+  // No org is passed: keys are user-global, so there is no single org whose
+  // shape could steer the recommendation toward Team.
+  return buildStatus("apiKeysMax", count, max, tier);
+}
+
+export async function enforceApiKeysLimit(
+  userId: string,
+): Promise<NextResponse | null> {
+  const status = await checkApiKeysLimit(userId);
+  return status?.reached ? limitResponse(status) : null;
 }
 
 /**
@@ -281,20 +449,30 @@ export async function enforceApiKeysLimit(
  * pgbouncer-pooled Postgres (Neon), producing an unhandled throw that Next
  * surfaces as a 500 with an empty body.
  */
-export async function enforceDocumentsPerBrainLimit(
+export async function checkDocumentsPerBrainLimit(
   tenant: PrismaClientTenant | PrismaTenant.TransactionClient,
   brainId: string,
   organizationId: string,
-): Promise<NextResponse | null> {
+): Promise<LimitStatus | null> {
   const [tier, count] = await Promise.all([
     effectiveTierForOrg(organizationId),
     tenant.vaultDocument.count({ where: { brainId } }),
   ]);
   const max = PLAN_LIMITS[tier].documentsPerBrain;
-  if (count >= max) {
-    return limitReached("documentsPerBrain", count, max, tier);
-  }
-  return null;
+  return buildStatus("documentsPerBrain", count, max, tier, organizationId);
+}
+
+export async function enforceDocumentsPerBrainLimit(
+  tenant: PrismaClientTenant | PrismaTenant.TransactionClient,
+  brainId: string,
+  organizationId: string,
+): Promise<NextResponse | null> {
+  const status = await checkDocumentsPerBrainLimit(
+    tenant,
+    brainId,
+    organizationId,
+  );
+  return status?.reached ? limitResponse(status) : null;
 }
 
 /**
@@ -310,11 +488,11 @@ export async function enforceDocumentsPerBrainLimit(
  * the open tx on pgbouncer-pooled Postgres (Neon) and throws, surfacing as a
  * 500 with an empty body.
  */
-export async function enforceStorageLimit(
+export async function checkStorageLimit(
   organizationId: string,
   additionalBytes = 0,
   tx?: PrismaTenant.TransactionClient,
-): Promise<NextResponse | null> {
+): Promise<LimitStatus | null> {
   const tier = await effectiveTierForOrg(organizationId);
   const max = PLAN_LIMITS[tier].storageBytesMax;
 
@@ -326,13 +504,26 @@ export async function enforceStorageLimit(
     });
     current = agg._sum.sizeBytes ?? 0;
   } catch {
-    // See enforceBrainsLimit — failure-open on an unreachable tenant.
+    // See checkBrainsLimit: failure-open on an unreachable tenant.
     return null;
   }
 
   const projected = current + additionalBytes;
-  if (projected > max) {
-    return limitReached("storageBytesMax", projected, max, tier);
-  }
-  return null;
+  return buildStatus(
+    "storageBytesMax",
+    projected,
+    max,
+    tier,
+    organizationId,
+    projected > max,
+  );
+}
+
+export async function enforceStorageLimit(
+  organizationId: string,
+  additionalBytes = 0,
+  tx?: PrismaTenant.TransactionClient,
+): Promise<NextResponse | null> {
+  const status = await checkStorageLimit(organizationId, additionalBytes, tx);
+  return status?.reached ? limitResponse(status) : null;
 }
