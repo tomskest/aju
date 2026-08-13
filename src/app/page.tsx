@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
-import { currentUser } from "@/lib/auth";
+import { currentUser, safeReturnTo } from "@/lib/auth";
 import AgentsSection from "@/components/landing/AgentsSection";
 import CloseSection from "@/components/landing/CloseSection";
 import HeroTerminal from "@/components/landing/HeroTerminal";
@@ -30,35 +30,6 @@ async function getStats() {
   }
 }
 
-/**
- * Accepts either a same-origin path (starting with `/`) or a full HTTPS URL
- * whose host ends in `.aju.sh` (e.g. `https://mcp.aju.sh/authorize?...`).
- * External hosts are rejected so a malicious `?return_to=...` can't turn
- * the landing page into an open redirect.
- */
-function safeReturnTo(raw: string | undefined): string | undefined {
-  if (!raw) return undefined;
-
-  if (raw.startsWith("/")) {
-    if (raw.startsWith("//")) return undefined;
-    if (raw.startsWith("/\\")) return undefined;
-    if (/^\/[a-z][a-z0-9+.-]*:/i.test(raw)) return undefined;
-    return raw;
-  }
-
-  try {
-    const parsed = new URL(raw);
-    if (parsed.protocol !== "https:") return undefined;
-    const host = parsed.hostname.toLowerCase();
-    if (host === "aju.sh" || host.endsWith(".aju.sh")) {
-      return parsed.toString();
-    }
-  } catch {
-    // fall through
-  }
-  return undefined;
-}
-
 const EMAIL_PREFILL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function safeEmailPrefill(raw: string | undefined): string | undefined {
@@ -79,7 +50,7 @@ export default async function Home({
   ]);
   const siteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? "";
   const params = await searchParams;
-  const returnTo = safeReturnTo(params.return_to);
+  const returnTo = safeReturnTo(params.return_to) ?? undefined;
   const initialEmail = safeEmailPrefill(params.email);
 
   // Signed-in users skip the landing page: forward to a same-origin/aju.sh

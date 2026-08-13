@@ -1,8 +1,13 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { prisma, tenantDbFor } from "@/lib/db";
 import { currentUser, getActiveOrganizationId } from "@/lib/auth";
 import { withBrainContext } from "@/lib/tenant";
 import { renderMarkdown, resolveWikilinksToMarkdown } from "@/lib/vault";
+import {
+  brainPagePath,
+  brainRoleFor,
+  findBrainInOtherOrgs,
+} from "@/lib/vault/cross-org-brain";
 import { resolveDocumentContent } from "@/lib/vault/query-block";
 import BrainExplorer from "@/components/app/brain/BrainExplorer";
 
@@ -10,7 +15,7 @@ export const dynamic = "force-dynamic";
 
 type PageProps = {
   params: Promise<{ name: string; path?: string[] }>;
-  searchParams: Promise<{ missing?: string }>;
+  searchParams: Promise<{ missing?: string; switched?: string }>;
 };
 
 type DocSummary = {
@@ -41,6 +46,7 @@ export default async function BrainPage(props: PageProps) {
   const missingHint = searchParams.missing
     ? decodeURIComponent(searchParams.missing)
     : null;
+  const alreadySwitched = searchParams.switched === "1";
 
   const user = await currentUser();
   if (!user) notFound();
@@ -57,21 +63,52 @@ export default async function BrainPage(props: PageProps) {
     where: { name: brainName },
     select: { id: true, name: true, type: true },
   });
-  if (!brain) notFound();
 
-  const access = await tenant.brainAccess.findUnique({
-    where: { brainId_userId: { brainId: brain.id, userId: user.id } },
-    select: { role: true },
-  });
-  let role = access?.role ?? null;
-  if (!role && brain.type === "org") {
-    const membership = await prisma.organizationMembership.findFirst({
-      where: { userId: user.id, organizationId },
-      select: { id: true },
+  let role: string | null = null;
+  if (brain) {
+    const access = await tenant.brainAccess.findUnique({
+      where: { brainId_userId: { brainId: brain.id, userId: user.id } },
+      select: { role: true },
     });
-    if (membership) role = "editor";
+    let isOrgMember = false;
+    if (!access && brain.type === "org") {
+      const membership = await prisma.organizationMembership.findFirst({
+        where: { userId: user.id, organizationId },
+        select: { id: true },
+      });
+      isOrgMember = membership !== null;
+    }
+    role = brainRoleFor(access?.role ?? null, brain.type, isOrgMember);
   }
-  if (!role) notFound();
+
+  // Cross-org fallback. This URL names a brain but not an org, and the
+  // active org is re-pinned to the caller's personal workspace on every
+  // login, so a link shared between teammates lands in the wrong tenant
+  // and 404s despite the reader having access. Before giving up, look for
+  // the brain in the caller's other orgs and switch the session over: the
+  // cookie has to be written by a route handler, not during render, so we
+  // bounce through the org switch endpoint and come back here.
+  //
+  // `switched=1` marks a load that already followed a switch. It stops the
+  // second search, so a brain that stays unresolvable 404s once instead of
+  // ping-ponging the browser.
+  if (!brain || !role) {
+    if (!alreadySwitched) {
+      const match = await findBrainInOtherOrgs(
+        user.id,
+        brainName,
+        organizationId,
+      );
+      if (match) {
+        const returnTo = brainPagePath(brainName, docPath, { switched: true });
+        redirect(
+          `/api/orgs/${encodeURIComponent(match.organizationId)}/switch` +
+            `?return_to=${encodeURIComponent(returnTo)}`,
+        );
+      }
+    }
+    notFound();
+  }
 
   const canWrite = role === "owner" || role === "editor";
   // Validation gate. Mirror src/lib/vault/brain.ts canValidate(): personal
