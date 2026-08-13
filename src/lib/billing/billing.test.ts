@@ -204,6 +204,8 @@ describe("applySubscription", () => {
     priceId?: string;
     subject?: { type: string; id: string };
     quantity?: number;
+    cancelAtPeriodEnd?: boolean;
+    cancelAt?: number;
   };
 
   /** Just enough Stripe.Subscription shape for applySubscription to read. */
@@ -211,7 +213,8 @@ describe("applySubscription", () => {
     ({
       id: spec.id,
       status: spec.status,
-      cancel_at_period_end: false,
+      cancel_at_period_end: spec.cancelAtPeriodEnd ?? false,
+      cancel_at: spec.cancelAt,
       metadata: spec.subject
         ? {
             aju_subject_type: spec.subject.type,
@@ -252,6 +255,81 @@ describe("applySubscription", () => {
     planTier: "pro",
     grandfatheredAt: null,
     stripeSubscriptionId: stored,
+  });
+
+  it("treats a `cancel_at` schedule as a pending cancellation", async () => {
+    // Current Stripe API versions record a cancel-at-period-end by setting
+    // `cancel_at` and leaving the boolean false. Reading only the boolean
+    // made a subscription that is winding down render as "Renews".
+    vi.stubEnv("STRIPE_PRICE_PRO_MONTHLY", "price_pro_m");
+    const db = fakeDb({ user: proUser("sub_live") });
+    await applySubscription(
+      fakeSub({
+        id: "sub_live",
+        status: "active",
+        priceId: "price_pro_m",
+        subject: { type: "user", id: "usr_1" },
+        cancelAtPeriodEnd: false,
+        cancelAt: 1_789_298_769,
+      }),
+      db as never,
+    );
+    expect(db.user.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          cancelAtPeriodEnd: true,
+          cancelAt: new Date(1_789_298_769 * 1000),
+          // Entitlement is untouched while it winds down: they paid through
+          // the end of the period and keep Pro caps until Stripe cancels it.
+          planTier: "pro",
+        }),
+      }),
+    );
+  });
+
+  it("still honours the legacy boolean on its own", async () => {
+    vi.stubEnv("STRIPE_PRICE_PRO_MONTHLY", "price_pro_m");
+    const db = fakeDb({ user: proUser("sub_live") });
+    await applySubscription(
+      fakeSub({
+        id: "sub_live",
+        status: "active",
+        priceId: "price_pro_m",
+        subject: { type: "user", id: "usr_1" },
+        cancelAtPeriodEnd: true,
+      }),
+      db as never,
+    );
+    expect(db.user.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          cancelAtPeriodEnd: true,
+          cancelAt: null,
+        }),
+      }),
+    );
+  });
+
+  it("leaves a plain renewal unmarked", async () => {
+    vi.stubEnv("STRIPE_PRICE_PRO_MONTHLY", "price_pro_m");
+    const db = fakeDb({ user: proUser("sub_live") });
+    await applySubscription(
+      fakeSub({
+        id: "sub_live",
+        status: "active",
+        priceId: "price_pro_m",
+        subject: { type: "user", id: "usr_1" },
+      }),
+      db as never,
+    );
+    expect(db.user.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          cancelAtPeriodEnd: false,
+          cancelAt: null,
+        }),
+      }),
+    );
   });
 
   it("ignores a revoke for a subscription other than the one on record", async () => {

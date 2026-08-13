@@ -191,6 +191,7 @@ export default async function OrgSettingsPage({ params, searchParams }: PageProp
           subscriptionStatus: true,
           currentPeriodEnd: true,
           cancelAtPeriodEnd: true,
+          cancelAt: true,
         },
       },
     },
@@ -288,11 +289,13 @@ export default async function OrgSettingsPage({ params, searchParams }: PageProp
                 </div>
                 <div className="flex flex-col gap-1">
                   <dt className="font-mono text-[10px] tracking-[0.24em] text-[var(--color-faint)] uppercase">
-                    {org.cancelAtPeriodEnd ? "ends" : "renews"}
+                    {org.cancelAt || org.cancelAtPeriodEnd ? "ends" : "renews"}
                   </dt>
                   <dd className="font-mono text-[13px] text-[var(--color-ink)]">
-                    {org.currentPeriodEnd
-                      ? org.currentPeriodEnd.toLocaleDateString("en-GB", {
+                    {/* A scheduled cancellation ends access on `cancelAt`,
+                        which need not be the period end. */}
+                    {org.cancelAt ?? org.currentPeriodEnd
+                      ? (org.cancelAt ?? org.currentPeriodEnd)!.toLocaleDateString("en-GB", {
                           day: "numeric",
                           month: "short",
                           year: "numeric",

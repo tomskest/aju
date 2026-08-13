@@ -81,8 +81,41 @@ function periodEnd(sub: Stripe.Subscription): Date | null {
   return typeof seconds === "number" ? new Date(seconds * 1000) : null;
 }
 
+/**
+ * When a scheduled cancellation takes effect, or null if none is scheduled.
+ *
+ * Usually equal to the period end, but not necessarily: `cancel_at` can be
+ * set to an arbitrary future date through the API, and then access ends on
+ * that date rather than at the end of the paid period.
+ */
+function cancelDate(sub: Stripe.Subscription): Date | null {
+  const seconds = sub.cancel_at;
+  return typeof seconds === "number" ? new Date(seconds * 1000) : null;
+}
+
 function priceIdOf(sub: Stripe.Subscription): string | null {
   return sub.items?.data?.[0]?.price?.id ?? null;
+}
+
+/**
+ * Pull a subscription's current state from Stripe and apply it.
+ *
+ * The mirror only moves when a webhook arrives, so a mapping gap or a missed
+ * delivery leaves it stale until the next lifecycle event, which can be a
+ * month away. Calling this from a surface that renders billing state makes
+ * that drift self-correcting instead of permanent.
+ *
+ * Throws on a Stripe failure or an unmapped price; callers rendering a page
+ * should catch and fall back to the stored values rather than 500.
+ */
+export async function reconcileSubscription(
+  subscriptionId: string,
+  db: Db = prisma,
+): Promise<void> {
+  await applySubscription(
+    await stripe().subscriptions.retrieve(subscriptionId),
+    db,
+  );
 }
 
 /**
@@ -124,11 +157,17 @@ export async function applySubscription(
     );
   }
 
+  const cancelAt = cancelDate(sub);
   const bookkeeping = {
     stripeSubscriptionId: sub.id,
     subscriptionStatus: sub.status,
     currentPeriodEnd: periodEnd(sub),
-    cancelAtPeriodEnd: sub.cancel_at_period_end ?? false,
+    // Both signals, because Stripe is mid-migration between them: current API
+    // versions record a cancel-at-period-end as `cancel_at` and leave the
+    // boolean false. Reading only the boolean makes a subscription that is
+    // winding down look like one that renews.
+    cancelAtPeriodEnd: (sub.cancel_at_period_end ?? false) || cancelAt !== null,
+    cancelAt,
   };
 
   if (subject.type === "user") {
@@ -143,6 +182,7 @@ type Bookkeeping = {
   subscriptionStatus: string;
   currentPeriodEnd: Date | null;
   cancelAtPeriodEnd: boolean;
+  cancelAt: Date | null;
 };
 
 async function applyToUser(

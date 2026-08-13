@@ -47,6 +47,11 @@ model User {
   subscriptionStatus   String?   @map("subscription_status")
   currentPeriodEnd     DateTime? @map("current_period_end")
   cancelAtPeriodEnd    Boolean   @default(false) @map("cancel_at_period_end")
+  /// When a scheduled cancellation takes effect. Stripe records a
+  /// cancel-at-period-end as `cancel_at` on current API versions and leaves
+  /// `cancel_at_period_end` false, so this is the field that actually says
+  /// whether the plan is winding down.
+  cancelAt             DateTime? @map("cancel_at")
 
   accounts    Account[]
   sessions    Session[]
@@ -277,6 +282,8 @@ model Organization {
   subscriptionStatus   String?   @map("subscription_status")
   currentPeriodEnd     DateTime? @map("current_period_end")
   cancelAtPeriodEnd    Boolean   @default(false) @map("cancel_at_period_end")
+  /// See User.cancelAt.
+  cancelAt             DateTime? @map("cancel_at")
   seatCount            Int       @default(0) @map("seat_count")
   /// Optimistic-locking counter. Bump on every mutating update; check the
   /// expected value in the WHERE clause to detect concurrent edits.
