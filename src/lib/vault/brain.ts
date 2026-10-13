@@ -178,13 +178,16 @@ export async function resolveBrain(
 }
 
 /**
- * All brain IDs the caller can access in the given tenant DB.
+ * All brain IDs the caller can access in the given tenant DB: the caller's
+ * BrainAccess grants, plus every `type: "org"` brain for a human principal
+ * (route helpers have already checked org membership). Agents see grants
+ * only. Env-var / legacy callers fall back to the full tenant list
+ * (single-tenant admin path).
  *
- * Inside a `withTenant` scope, RLS pins `app.current_brain_ids` to the
- * caller's accessible set (BrainAccess + org-fallback for human members of
- * `type: "org"` brains). Listing brains directly therefore yields exactly
- * the rows the caller may read. Env-var / legacy callers fall back to the
- * full tenant list (single-tenant admin path).
+ * The set is built from the grants themselves, never from an unfiltered
+ * brain list. RLS is the safety net behind this filter, not a substitute
+ * for it: a connection whose role bypasses RLS would otherwise hand every
+ * brain in the org, personal ones included, to every caller.
  */
 export async function resolveAccessibleBrainIds(
   tenant: TenantReader,
@@ -192,8 +195,19 @@ export async function resolveAccessibleBrainIds(
 ): Promise<string[]> {
   const principal = principalAccessFilter(auth);
   if (principal) {
-    const brains = await tenant.brain.findMany({ select: { id: true } });
-    return brains.map((b) => b.id);
+    const grants = await tenant.brainAccess.findMany({
+      where: principal,
+      select: { brainId: true },
+    });
+    const ids = new Set(grants.map((g) => g.brainId));
+    if (!auth?.agentId) {
+      const orgBrains = await tenant.brain.findMany({
+        where: { type: "org" },
+        select: { id: true },
+      });
+      for (const b of orgBrains) ids.add(b.id);
+    }
+    return [...ids];
   }
 
   const allBrains = await tenant.brain.findMany({ select: { id: true } });

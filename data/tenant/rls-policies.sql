@@ -175,3 +175,68 @@ BEGIN
       CHECK ((user_id IS NULL) <> (agent_id IS NULL));
   END IF;
 END $$;
+
+-- ---------- RLS role: what request transactions run as ----------
+--
+-- The login role is created through the Neon API, which gives it BYPASSRLS,
+-- so on that role none of the policies above apply. Request transactions
+-- therefore drop to `<login role>_rls`, a role without BYPASSRLS, for their
+-- duration (setBrainContextOnTx in src/lib/tenant/context.ts, via SET LOCAL
+-- ROLE). Maintenance paths that open the tenant DB directly keep the login
+-- role and are unaffected.
+--
+-- The role gets the login role's table rights, nothing more. It is only
+-- made reachable (membership granted) once every table, sequence and
+-- function here belongs to the login role, so every grant below took
+-- effect; otherwise the switch stays off for this DB and a warning says
+-- why. Revoking the membership turns enforcement off for one DB at once;
+-- SKIP_TENANT_RLS_ROLE=1 turns it off everywhere without touching the DB.
+
+DO $$
+DECLARE
+  login_role text := current_user;
+  rls_role text := current_user || '_rls';
+  -- From PG16 the creator holds ADMIN without SET, so MEMBER is always true.
+  can_set text := CASE WHEN current_setting('server_version_num')::int >= 160000 THEN 'SET' ELSE 'MEMBER' END;
+  foreign_owned int;
+BEGIN
+  IF login_role LIKE '%\_rls' THEN
+    RAISE EXCEPTION 'rls-policies.sql must run as the login role, not %', login_role;
+  END IF;
+
+  SELECT count(*) INTO foreign_owned FROM (
+    SELECT tableowner AS owner FROM pg_tables WHERE schemaname = 'public'
+    UNION ALL
+    SELECT pg_get_userbyid(c.relowner) FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relkind = 'S'
+    UNION ALL
+    SELECT pg_get_userbyid(p.proowner) FROM pg_proc p
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public'
+        AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e')
+  ) o WHERE o.owner <> login_role;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = rls_role) THEN
+    EXECUTE format('CREATE ROLE %I NOLOGIN NOBYPASSRLS', rls_role);
+  ELSE
+    EXECUTE format('ALTER ROLE %I NOLOGIN NOBYPASSRLS', rls_role);
+  END IF;
+
+  EXECUTE format('GRANT USAGE ON SCHEMA public TO %I', rls_role);
+  EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO %I', rls_role);
+  EXECUTE format('GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO %I', rls_role);
+  EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO %I', rls_role);
+  EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %I', rls_role);
+  EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO %I', rls_role);
+  EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO %I', rls_role);
+
+  IF foreign_owned = 0 THEN
+    EXECUTE format('GRANT %I TO %I', rls_role, login_role);
+  ELSE
+    RAISE WARNING '% object(s) in public are not owned by %, so % may lack rights; RLS role switch left off', foreign_owned, login_role, rls_role;
+    IF pg_has_role(login_role, rls_role, can_set) THEN
+      EXECUTE format('REVOKE %I FROM %I', rls_role, login_role);
+    END IF;
+  END IF;
+END $$;

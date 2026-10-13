@@ -19,10 +19,10 @@
  * `withBrainContext` / `withTenant`.
  */
 
-import type { Prisma as PrismaTenant } from "@prisma/client-tenant";
+import { Prisma } from "@prisma/client-tenant";
 import { prisma, tenantDbFor, type PrismaClientTenant } from "@/lib/db";
 
-type TenantTx = PrismaTenant.TransactionClient;
+type TenantTx = Prisma.TransactionClient;
 
 const BRAIN_ID_PATTERN = /^[a-z0-9]+$/;
 
@@ -67,6 +67,11 @@ export async function withBrainContext<T>(
   );
 }
 
+// From Postgres 16 a role's creator is a member of it with ADMIN but without
+// SET, so MEMBER is true even where SET ROLE would be refused. Ask for SET
+// there; before 16, MEMBER is the right to SET ROLE.
+const canSetRole = Prisma.sql`CASE WHEN current_setting('server_version_num')::int >= 160000 THEN 'SET' ELSE 'MEMBER' END`;
+
 /**
  * Apply the brain-context session variable to an already-open transaction.
  * Useful when composing multiple writes inside a `client.$transaction` the
@@ -76,6 +81,15 @@ export async function withBrainContext<T>(
  * parameter — `SET LOCAL ... = $1` is not legal Postgres because SET only
  * accepts literal expressions. Empty list maps to a sentinel so the RLS
  * policy's "unset escape" branch does NOT fire (which would widen access).
+ *
+ * It also drops the transaction to the tenant's RLS role, `<login role>_rls`.
+ * The login role is created through the Neon API, which gives it BYPASSRLS,
+ * so without the switch no policy ever applies. The `_rls` role has no
+ * BYPASSRLS, and data/tenant/rls-policies.sql creates it and makes the login
+ * role a member. `set_config('role', …, true)` is SET LOCAL ROLE, so it ends
+ * with the transaction and never outlives it on a pooled connection. Where
+ * the role does not exist yet, or membership was revoked, nothing switches.
+ * SKIP_TENANT_RLS_ROLE=1 turns the switch off everywhere.
  */
 export async function setBrainContextOnTx(
   tx: TenantTx,
@@ -83,7 +97,37 @@ export async function setBrainContextOnTx(
 ): Promise<void> {
   const joined = formatBrainIds(brainIds);
   const value = joined.length === 0 ? "__none__" : joined;
-  await tx.$executeRaw`SELECT set_config('app.current_brain_ids', ${value}, true)`;
+  const switchRole =
+    process.env.SKIP_TENANT_RLS_ROLE === "1"
+      ? Prisma.empty
+      : Prisma.sql`, (
+          SELECT set_config('role', r.rolname, true)
+          FROM pg_roles r
+          WHERE r.rolname = current_user || '_rls'
+            AND pg_has_role(current_user, r.oid, ${canSetRole})
+        )`;
+  await tx.$executeRaw`SELECT set_config('app.current_brain_ids', ${value}, true)${switchRole}`;
+}
+
+/**
+ * Run `fn` with the brain filter lifted, inside a transaction that is
+ * otherwise scoped to the caller's brains. For reads that are org-wide by
+ * definition, such as the storage quota pooled across every brain, which
+ * the caller's own view would undercount. The previous setting is restored
+ * afterwards, so an unscoped transaction stays unscoped.
+ */
+export async function withOrgWideRead<T>(
+  tx: TenantTx,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const [{ prev }] = await tx.$queryRaw<Array<{ prev: string | null }>>`
+    SELECT current_setting('app.bypass_rls', true) AS prev`;
+  await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', true)`;
+  try {
+    return await fn();
+  } finally {
+    await tx.$executeRaw`SELECT set_config('app.bypass_rls', ${prev ?? ""}, true)`;
+  }
 }
 
 /**

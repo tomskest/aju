@@ -40,6 +40,7 @@ import type {
   Prisma as PrismaTenant,
 } from "@prisma/client-tenant";
 import { prisma, tenantDbFor } from "@/lib/db";
+import { withOrgWideRead } from "@/lib/tenant/context";
 import { appUrl } from "./stripe";
 import { TIER_LABELS } from "./tiers";
 
@@ -498,10 +499,12 @@ export async function checkStorageLimit(
 
   let current: number;
   try {
-    const client = tx ?? (await tenantDbFor(organizationId));
-    const agg = await client.vaultFile.aggregate({
-      _sum: { sizeBytes: true },
-    });
+    // Pooled across every brain, so inside the caller's scoped transaction
+    // the brain filter is lifted for this one read.
+    const sum = { _sum: { sizeBytes: true } } as const;
+    const agg = tx
+      ? await withOrgWideRead(tx, () => tx.vaultFile.aggregate(sum))
+      : await (await tenantDbFor(organizationId)).vaultFile.aggregate(sum);
     current = agg._sum.sizeBytes ?? 0;
   } catch {
     // See checkBrainsLimit: failure-open on an unreachable tenant.
